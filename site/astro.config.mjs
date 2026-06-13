@@ -6,6 +6,8 @@ import { defineConfig } from "astro/config";
 // is chosen.
 export default defineConfig({
   output: "static",
-  // site: "https://hip.example", // TODO: set once the host/domain is chosen
+  // GitHub Pages project site: served under the /human-inbox-protocol/ subpath.
+  site: "https://mattsilv.github.io",
+  base: "/human-inbox-protocol/",
   build: { inlineStylesheets: "auto" },
 });

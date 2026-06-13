@@ -5,6 +5,10 @@ import "../styles/global.css";
 // Single-route static pitch page. Copy is drawn from the project README and the
 // "coffee read" narrative; palette mirrors src/cli/tty.ts.
 
+const base = import.meta.env.BASE_URL; // "/human-inbox-protocol/" on GitHub Pages
+const canonical = "https://mattsilv.github.io/human-inbox-protocol/";
+const repo = "https://github.com/mattsilv/human-inbox-protocol";
+
 const primitives = [
   {
     glyph: "◇",
@@ -54,7 +58,8 @@ const primitives = [
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    <link rel="canonical" href={canonical} />
     <title>HIP — the agent↔human interaction protocol</title>
     <meta
       name="description"
@@ -66,11 +71,12 @@ const primitives = [
       content="A universal answering machine and async to-do list shared between you and all your AI agents."
     />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
   </head>
   <body>
     <header class="topbar">
       <div class="wrap">
-        <a class="brand" href="/"><span class="caret">▮</span> hip</a>
+        <a class="brand" href={base}><span class="caret">▮</span> hip</a>
         <nav>
           <a href="#problem">problem</a>
           <a href="#primitives">primitives</a>
@@ -233,11 +239,12 @@ const primitives = [
         <div class="wrap">
           <p class="eyebrow">Docs &amp; spec</p>
           <div class="links">
-            <!-- TODO repo url: no git remote set yet -->
-            <a href="#">GitHub repo →</a>
-            <a href="#">Spec (v0.1) →</a>
-            <a href="#">MCP binding →</a>
-            <a href="#">Hermes integration →</a>
+            <a href={repo}>GitHub repo →</a>
+            <a href={`${repo}/blob/main/docs/spec.md`}>Spec (v0.1) →</a>
+            <a href={`${repo}/blob/main/docs/binding.md`}>MCP binding →</a>
+            <a href={`${repo}/blob/main/docs/hermes-integration.md`}
+              >Hermes integration →</a
+            >
           </div>
           <p class="status">
             <span class="green">●</span> Status: MVP under construction · Schema
