@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <rect width="32" height="32" rx="7" fill="#0b0d0e"/>
-  <rect x="7" y="8" width="4" height="16" rx="1" fill="#56d4dd"/>
-  <rect x="7" y="14" width="13" height="4" rx="1" fill="#56d4dd"/>
-  <rect x="16" y="8" width="4" height="16" rx="1" fill="#56d4dd"/>
-  <rect x="24" y="8" width="3.4" height="16" rx="1.2" fill="#5ad17f">
-    <animate attributeName="opacity" values="1;0;1" dur="1.05s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.5;1"/>
+  <!-- terminal prompt: green chevron + blinking cyan cursor block -->
+  <path d="M8 11 L14 16 L8 21" fill="none" stroke="#5ad17f" stroke-width="2.6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="17" y="19" width="8" height="2.8" rx="1.2" fill="#56d4dd">
+    <animate attributeName="opacity" values="1;0;1" dur="1.05s"
+             repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.5;1"/>
   </rect>
 </svg>
