@@ -77,7 +77,7 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   return task;
 }
 
-/** Content-only update. Rejects status/waiting/provenance — those have their own verbs. */
+/** Content-only update. Rejects status/waitingOn/provenance — those have their own verbs. */
 export function updateTask(
   store: Store,
   id: string,
@@ -105,7 +105,7 @@ export type WaitingInput = {
   _meta?: Record<string, unknown>;
 };
 
-/** task_wait: set or clear the waiting object; status follows (waiting present iff status==waiting). */
+/** task_wait: set or clear waitingOn; status follows (waitingOn present iff status == "waiting"). */
 export function setWaiting(
   store: Store,
   id: string,

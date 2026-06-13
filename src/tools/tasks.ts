@@ -88,7 +88,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
     "task_wait",
     {
       title: "Set/clear waitingOn",
-      description: "Set the waiting object (status→waiting) or clear it (status→open).",
+      description: "Set waitingOn (status→waiting) or clear it (status→open).",
       inputSchema: { actorId: z.string(), id: z.string(), waitingOn: zWaiting.nullable() },
     },
     async (a) => guard(() => ok(domain.setWaiting(a.id, a.waitingOn, a.actorId))),

@@ -66,7 +66,7 @@ about the task, and where reconcile appends inbound messages). The **Event** log
 state changes. Both append-only; never conflated.
 
 **One verb per transition.** Content edits never change status. `task_update` rejects
-`status`/`waiting`; transitions go through `task_wait`, `task_done`, `task_drop`. One
+`status`/`waitingOn`; transitions go through `task_wait`, `task_done`, `task_drop`. One
 write path per transition keeps the event log unambiguous.
 
 ### 2. Decision — one question, answerable in one tap

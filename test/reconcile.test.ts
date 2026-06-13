@@ -60,7 +60,7 @@ describe("reconcile flow (U6)", () => {
     expect(after.thread?.some((e) => e.content === "Saturday works!")).toBe(true);
   });
 
-  it("tier 2: unique waiting.onActor attaches even without a reference", () => {
+  it("tier 2: unique waitingOn.onActor attaches even without a reference", () => {
     const t = dinnerWaitingOnAlex();
     const r = reconcile(store, env({ reference: undefined }), SYS);
     expect(r.verdict).toBe("attached");

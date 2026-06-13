@@ -121,6 +121,8 @@ describe("store layer (U2)", () => {
     const timers = s3.allTimers();
     expect(timers).toHaveLength(1); // rebuilt from the waiting task's frontmatter
     expect(s3.listTasks()).toHaveLength(1);
+    // the renamed `waitingOn` key survives the write → reindex → read round-trip
+    expect(s3.listTasks()[0].waitingOn?.onActor).toBe("act_alex");
     s3.close();
   });
 
