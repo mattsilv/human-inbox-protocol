@@ -96,7 +96,7 @@ async function waitingTask(
   await client.callOk("task_wait", {
     actorId: owner,
     id,
-    waiting: { onActor, since: new Date().toISOString(), cadence },
+    waitingOn: { onActor, since: new Date().toISOString(), cadence },
   });
   return id;
 }

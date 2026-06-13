@@ -34,11 +34,11 @@ describe("domain layer (U3)", () => {
 
     d.setWaiting(t.id, { onActor: "act_alex", since: "2026-06-09", cadence: "P3D" }, MATT);
     expect(store.getTask(t.id)!.status).toBe("waiting");
-    expect(store.getTask(t.id)!.waiting?.onActor).toBe("act_alex");
+    expect(store.getTask(t.id)!.waitingOn?.onActor).toBe("act_alex");
 
     d.setWaiting(t.id, null, MATT);
     expect(store.getTask(t.id)!.status).toBe("open");
-    expect(store.getTask(t.id)!.waiting).toBeNull();
+    expect(store.getTask(t.id)!.waitingOn).toBeNull();
 
     d.markDone(t.id, MATT);
     expect(store.getTask(t.id)!.status).toBe("done");
@@ -62,7 +62,7 @@ describe("domain layer (U3)", () => {
   it("task_update rejects status and waiting fields (one verb per transition)", () => {
     const t = d.createTask({ title: "x", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
     expect(() => d.updateTask(t.id, { status: "done" }, MATT)).toThrowError(/cannot change "status"/);
-    expect(() => d.updateTask(t.id, { waiting: {} }, MATT)).toThrowError(/cannot change "waiting"/);
+    expect(() => d.updateTask(t.id, { waitingOn: {} }, MATT)).toThrowError(/cannot change "waitingOn"/);
     // content field is fine
     const u = d.updateTask(t.id, { title: "renamed", priority: "high" }, MATT);
     expect(u.title).toBe("renamed");

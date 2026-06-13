@@ -90,7 +90,7 @@ export interface Task {
   delegatedBy: DelegatedBy; // REQUIRED provenance
   references?: Reference[];
   thread?: ThreadEntry[];
-  waiting?: Waiting | null; // present iff status == waiting
+  waitingOn?: Waiting | null; // present iff status == "waiting"
   createdAt: Iso;
   updatedAt: Iso;
   workspaceId?: string;

@@ -22,7 +22,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
         place: z.string().optional(),
         delegatedBy: zDelegatedBy,
         references: z.array(zReference).optional(),
-        waiting: zWaiting.optional(),
+        waitingOn: zWaiting.optional(),
       },
     },
     async (a) =>
@@ -38,7 +38,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
             ...(a.place ? { place: a.place } : {}),
             delegatedBy: a.delegatedBy,
             ...(a.references ? { references: a.references as Reference[] } : {}),
-            ...(a.waiting ? { waiting: a.waiting } : {}),
+            ...(a.waitingOn ? { waitingOn: a.waitingOn } : {}),
           },
           a.actorId,
         );
@@ -87,11 +87,11 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
   server.registerTool(
     "task_wait",
     {
-      title: "Set/clear waiting",
-      description: "Set the waiting object (status→waiting) or clear it (status→open).",
-      inputSchema: { actorId: z.string(), id: z.string(), waiting: zWaiting.nullable() },
+      title: "Set/clear waitingOn",
+      description: "Set waitingOn (status→waiting) or clear it (status→open).",
+      inputSchema: { actorId: z.string(), id: z.string(), waitingOn: zWaiting.nullable() },
     },
-    async (a) => guard(() => ok(domain.setWaiting(a.id, a.waiting, a.actorId))),
+    async (a) => guard(() => ok(domain.setWaiting(a.id, a.waitingOn, a.actorId))),
   );
 
   server.registerTool(

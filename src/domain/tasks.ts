@@ -24,7 +24,7 @@ export interface CreateTaskInput {
   place?: string;
   delegatedBy: DelegatedBy;
   references?: Reference[];
-  waiting?: Waiting;
+  waitingOn?: Waiting;
   _meta?: Record<string, unknown>;
 }
 
@@ -49,11 +49,11 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   if (!input.delegatedBy?.actor) throw validation("task.delegatedBy.actor is required (provenance)");
   const now = store.nowIso();
   const id = newId("task");
-  const waiting = input.waiting;
+  const waitingOn = input.waitingOn;
   const task: Task = {
     id,
     title: input.title,
-    status: waiting ? "waiting" : "open",
+    status: waitingOn ? "waiting" : "open",
     delegatedBy: input.delegatedBy,
     createdAt: now,
     updatedAt: now,
@@ -66,8 +66,8 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   if (input.place) task.place = input.place;
   if (input.references) task.references = input.references;
   if (input._meta) task._meta = input._meta;
-  if (waiting) {
-    task.waiting = normalizeWaiting(waiting, now);
+  if (waitingOn) {
+    task.waitingOn = normalizeWaiting(waitingOn, now);
   }
 
   store.writeObjects(
@@ -77,7 +77,7 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   return task;
 }
 
-/** Content-only update. Rejects status/waiting/provenance — those have their own verbs. */
+/** Content-only update. Rejects status/waitingOn/provenance — those have their own verbs. */
 export function updateTask(
   store: Store,
   id: string,
@@ -105,21 +105,21 @@ export type WaitingInput = {
   _meta?: Record<string, unknown>;
 };
 
-/** task_wait: set or clear the waiting object; status follows (waiting present iff status==waiting). */
+/** task_wait: set or clear waitingOn; status follows (waitingOn present iff status == "waiting"). */
 export function setWaiting(
   store: Store,
   id: string,
-  waiting: WaitingInput | null,
+  waitingOn: WaitingInput | null,
   actorId: string,
 ): Task {
   return mutateMarkdown<Task>(store, "task", id, actorId, (i) => store.loadTask(i), (t) => {
     if (TERMINAL.includes(t.status)) throw stateError(`cannot change waiting on a ${t.status} task`);
-    if (waiting) {
+    if (waitingOn) {
       t.status = "waiting";
-      t.waiting = normalizeWaiting(waiting, store.nowIso());
+      t.waitingOn = normalizeWaiting(waitingOn, store.nowIso());
     } else {
       t.status = "open";
-      t.waiting = null;
+      t.waitingOn = null;
     }
     return [event(store, id, actorId, "status-changed", { to: t.status })];
   });
@@ -138,7 +138,7 @@ function transition(store: Store, id: string, to: TaskStatus, actorId: string): 
     if (t.status === to) throw stateError(`task is already ${to}`);
     if (TERMINAL.includes(t.status)) throw stateError(`task is ${t.status} and cannot transition to ${to}`);
     t.status = to;
-    t.waiting = null;
+    t.waitingOn = null;
     return [event(store, id, actorId, "status-changed", { to })];
   });
 }
@@ -176,19 +176,19 @@ export function appendThread(
 
 /**
  * Advance the nudge timer after a fire (or to repair a crashed fire): stamp
- * waiting.lastNudge = now, which recomputes next_fire_at to now + cadence on reindex.
+ * waitingOn.lastNudge = now, which recomputes next_fire_at to now + cadence on reindex.
  * No-op if the task is no longer waiting. Emits a nudge-fired event.
  */
 export function recordNudge(store: Store, id: string, actorId: string): Task | null {
   const fresh = store.loadTask(id);
   if (!fresh) return null;
   const t = fresh.obj;
-  if (t.status !== "waiting" || !t.waiting) return t;
-  t.waiting.lastNudge = store.nowIso();
+  if (t.status !== "waiting" || !t.waitingOn) return t;
+  t.waitingOn.lastNudge = store.nowIso();
   t.updatedAt = store.nowIso();
   store.writeObjects(
     [{ type: "task", obj: t as unknown as Record<string, unknown> }],
-    [event(store, id, actorId, "nudge-fired", { lastNudge: t.waiting.lastNudge })],
+    [event(store, id, actorId, "nudge-fired", { lastNudge: t.waitingOn.lastNudge })],
   );
   return t;
 }
@@ -217,7 +217,7 @@ export function listTasks(store: Store, filter?: { status?: TaskStatus }): Task[
 // ---- helpers --------------------------------------------------------------
 
 function normalizeWaiting(w: WaitingInput, now: string): Waiting {
-  if (!w.onActor) throw validation("waiting.onActor is required");
+  if (!w.onActor) throw validation("waitingOn.onActor is required");
   const out: Waiting = {
     onActor: w.onActor,
     since: w.since ?? now.slice(0, 10),

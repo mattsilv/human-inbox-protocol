@@ -103,7 +103,7 @@ describe("store layer (U2)", () => {
     makeTask(s2, {
       title: "dinner with Alex",
       status: "waiting",
-      waiting: { onActor: "act_alex", since: "2026-06-09", cadence: "P3D", lastNudge: null },
+      waitingOn: { onActor: "act_alex", since: "2026-06-09", cadence: "P3D", lastNudge: null },
     });
     expect(s2.allTimers()).toHaveLength(1);
     s2.close();
@@ -121,6 +121,8 @@ describe("store layer (U2)", () => {
     const timers = s3.allTimers();
     expect(timers).toHaveLength(1); // rebuilt from the waiting task's frontmatter
     expect(s3.listTasks()).toHaveLength(1);
+    // the renamed `waitingOn` key survives the write → reindex → read round-trip
+    expect(s3.listTasks()[0].waitingOn?.onActor).toBe("act_alex");
     s3.close();
   });
 

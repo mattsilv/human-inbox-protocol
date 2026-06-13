@@ -6,7 +6,7 @@ import { addDuration } from "./duration.js";
 // INSERT OR REPLACE) so reindex and incremental updates share one code path.
 
 export function indexTask(db: Db, task: Task, hash: string): void {
-  const waitingActor = task.status === "waiting" ? (task.waiting?.onActor ?? null) : null;
+  const waitingActor = task.status === "waiting" ? (task.waitingOn?.onActor ?? null) : null;
   db.prepare(
     `INSERT OR REPLACE INTO task_index
      (id, title, status, next_action_on, waiting_on_actor, priority, content_hash, created_at, updated_at)
@@ -46,10 +46,10 @@ export function indexTask(db: Db, task: Task, hash: string): void {
 /** A waiting task with a valid cadence owns exactly one timer row; else none. */
 export function reindexTimerForTask(db: Db, task: Task): void {
   db.prepare(`DELETE FROM timers WHERE task_id = ?`).run(task.id);
-  if (task.status !== "waiting" || !task.waiting) return;
-  const cadence = task.waiting.cadence;
+  if (task.status !== "waiting" || !task.waitingOn) return;
+  const cadence = task.waitingOn.cadence;
   if (!cadence) return;
-  const base = task.waiting.lastNudge ?? task.waiting.since;
+  const base = task.waitingOn.lastNudge ?? task.waitingOn.since;
   const baseMs = base ? Date.parse(base) : NaN;
   if (Number.isNaN(baseMs)) return;
   const next = addDuration(baseMs, cadence);
@@ -57,7 +57,7 @@ export function reindexTimerForTask(db: Db, task: Task): void {
   db.prepare(
     `INSERT OR REPLACE INTO timers (task_id, next_fire_at, cadence, last_nudge, since)
      VALUES (?,?,?,?,?)`,
-  ).run(task.id, next, cadence, task.waiting.lastNudge ?? null, task.waiting.since ?? null);
+  ).run(task.id, next, cadence, task.waitingOn.lastNudge ?? null, task.waitingOn.since ?? null);
 }
 
 export function indexDecision(db: Db, d: Decision, hash: string): void {

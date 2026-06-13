@@ -30,7 +30,7 @@ When Hermes asks a human something and is waiting for a reply:
 ```
 task_create {
   actorId, title, delegatedBy: { actor, role },
-  waiting: { onActor: "<who you asked>", since: "<ISO date>", cadence: "P3D", via: "<reference id>" }
+  waitingOn: { onActor: "<who you asked>", since: "<ISO date>", cadence: "P3D", via: "<reference id>" }
 }
 ```
 

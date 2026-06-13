@@ -173,7 +173,7 @@ export function doctor(store: Store): DoctorReport {
   for (const id of taskFiles) {
     const t = store.getTask(id);
     if (!t) continue;
-    const wantsTimer = t.status === "waiting" && !!t.waiting?.cadence;
+    const wantsTimer = t.status === "waiting" && !!t.waitingOn?.cadence;
     const hasTimer = timers.has(id);
     if (wantsTimer && !hasTimer)
       issues.push({ severity: "error", code: "missing-timer", message: `waiting task ${id} has no timer`, id });

@@ -69,7 +69,7 @@ function classify(
     if (ids.length > 1) return escalate(store, domain, env, ids, actorId);
   }
 
-  // Tier 2 — resolved sender is the unique waiting.onActor.
+  // Tier 2 — resolved sender is the unique waitingOn.onActor.
   if (sender) {
     const ids = liveTasks(store, store.findWaitingTaskIdsByActor(sender));
     if (ids.length === 1) return attach(store, ids[0]!, env, sender, actorId);
@@ -111,10 +111,10 @@ function attach(
   thread.push({ actor: sender ?? env.from, content: env.content, at: store.nowIso(), envelopeId: env.id });
 
   // Waiting → open when the matched task was waiting on this sender (reply received).
-  const flipped = t.status === "waiting" && t.waiting?.onActor === sender;
+  const flipped = t.status === "waiting" && t.waitingOn?.onActor === sender;
   if (flipped) {
     t.status = "open";
-    t.waiting = null;
+    t.waitingOn = null;
   }
   t.updatedAt = store.nowIso();
 
