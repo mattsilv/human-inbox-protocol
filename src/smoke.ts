@@ -62,7 +62,7 @@ export async function runSmoke(log: (s: string) => void = () => {}): Promise<Smo
       title: "Dinner with Alex on Saturday",
       delegatedBy: { actor: OWNER, role: "creator" },
       references: [{ id: "ref_im", type: "email-thread", globalId: "imessage:thread_alex" }],
-      waiting: { onActor: ALEX, since, cadence: "P1D" },
+      waitingOn: { onActor: ALEX, since, cadence: "P1D" },
     })) as { id: string };
 
     engine.tick(); // server-owned timer scan: a 3-day-overdue P1D cadence fires once

@@ -38,7 +38,7 @@ session — see the two-state-machines rule).
   "title": "Unpack suitcase from the New York trip",
   "status": "open | waiting | done | dropped",
   "delegatedBy": { "actor": "act_...", "role": "creator | delegator" },  // REQUIRED provenance
-  "waiting": Waiting | null,          // present iff status == waiting
+  "waitingOn": Waiting | null,          // present iff status == "waiting"
   "references": [ Reference ],        // where truth lives outside HIP
   "thread": [ { "actor", "content", "at" } ],  // the shared substrate humans + agents both write to
   "description": "...",               // markdown
@@ -97,7 +97,7 @@ block. Same object, two vocabularies.
 
 ### 3. Nudge — the GTD waiting-for triple, agent-addressable
 
-Lives on the task as `waiting`; surfaces as a decision when cadence fires.
+Lives on the task as `waitingOn`; surfaces as a decision when cadence fires.
 
 ```jsonc
 {
@@ -137,7 +137,7 @@ Not a stored object — a flow with a defined input and result.
 flowchart TD
     I[Inbound: email / message / webhook] --> L{Reference globalId match?}
     L -->|yes, unique| A[verdict: attached — silent]
-    L -->|no| W{Unique waiting.onActor?}
+    L -->|no| W{Unique waitingOn.onActor?}
     W -->|yes| A
     W -->|no| E{Entity alias → actor → unique task?}
     E -->|yes| A
@@ -145,7 +145,7 @@ flowchart TD
 ```
 
 The reference implementation's verdict is **deterministic tiers** — reference
-`globalId`, then unique `waiting.onActor`, then entity alias — with no LLM in the
+`globalId`, then unique `waitingOn.onActor`, then entity alias — with no LLM in the
 daemon. Anything ambiguous escalates a one-tap decision; `created` happens only via
 that decision, keeping the human in the loop. *Alex texts "Saturday works!" → matches
 the dinner task's iMessage reference → attaches, status flips `waiting → open`. No

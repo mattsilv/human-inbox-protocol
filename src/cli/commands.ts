@@ -108,7 +108,7 @@ function renderDecision(d: Decision, n: number, total: number): string {
 function renderTaskLine(t: Task): string {
   const flag =
     t.status === "waiting"
-      ? `${colorStatus("waiting")} on ${t.waiting?.onActor ?? "?"}`
+      ? `${colorStatus("waiting")} on ${t.waitingOn?.onActor ?? "?"}`
       : colorStatus(t.status);
   return `${colorId(t.id)}  [${flag}]  ${t.title}`;
 }
@@ -119,8 +119,8 @@ function renderTaskView(t: Task, executions: Execution[], evs: HipEvent[]): stri
     `id: ${colorId(t.id)}   from: ${t.delegatedBy?.actor} (${t.delegatedBy?.role})`,
   ];
   if (t.description) lines.push("", t.description);
-  if (t.status === "waiting" && t.waiting) {
-    lines.push("", `${colorStatus("waiting")} on ${t.waiting.onActor} since ${t.waiting.since}` + (t.waiting.cadence ? ` (every ${t.waiting.cadence})` : ""));
+  if (t.status === "waiting" && t.waitingOn) {
+    lines.push("", `${colorStatus("waiting")} on ${t.waitingOn.onActor} since ${t.waitingOn.since}` + (t.waitingOn.cadence ? ` (every ${t.waitingOn.cadence})` : ""));
   }
   if (t.references?.length) {
     lines.push("", colorHeading("references:"));

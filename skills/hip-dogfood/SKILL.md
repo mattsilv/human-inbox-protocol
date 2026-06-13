@@ -88,7 +88,7 @@ protocol hides exactly the gap dogfooding exists to find.
 
 ## What good looks like
 
-- Every "I'm waiting on someone" lives in a task's `waiting`, not your memory.
+- Every "I'm waiting on someone" lives in a task's `waitingOn`, not your memory.
 - Every "I need Matt to decide" is a `task_block` / decision, surfaced in `hip inbox`.
 - Every inbound reply goes through `reconcile_submit`.
 - Every gap is a `PROTOCOL-GAP` task, not a silent workaround.

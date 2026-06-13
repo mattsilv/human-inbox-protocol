@@ -31,7 +31,7 @@ describe("reconcile flow (U6)", () => {
         title: "Dinner with Alex on Saturday",
         delegatedBy: { actor: MATT, role: "creator" },
         references: [{ id: "ref_1", type: "email-thread", globalId: "imessage:thread_abc" }],
-        waiting: { onActor: "act_alex", since: "2026-06-09", cadence: "P3D" },
+        waitingOn: { onActor: "act_alex", since: "2026-06-09", cadence: "P3D" },
       },
       MATT,
     );
@@ -108,8 +108,8 @@ describe("reconcile flow (U6)", () => {
   });
 
   it("two waiting tasks on the same actor escalate (tier 2 needs uniqueness)", () => {
-    d.createTask({ title: "A", delegatedBy: { actor: MATT, role: "creator" }, waiting: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
-    d.createTask({ title: "B", delegatedBy: { actor: MATT, role: "creator" }, waiting: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
+    d.createTask({ title: "A", delegatedBy: { actor: MATT, role: "creator" }, waitingOn: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
+    d.createTask({ title: "B", delegatedBy: { actor: MATT, role: "creator" }, waitingOn: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
     const r = reconcile(store, env({ reference: undefined }), SYS);
     expect(r.verdict).toBe("escalated");
     expect(store.getDecision(r.decision!)!.options?.filter((o) => o.id.startsWith("tsk_")).length).toBe(2);
@@ -126,7 +126,7 @@ describe("reconcile flow (U6)", () => {
   it("resolving an escalation with attach performs the attach and records steered", () => {
     const t = dinnerWaitingOnAlex();
     // Force an escalation by making the sender ambiguous (two waiting tasks).
-    d.createTask({ title: "Other Alex task", delegatedBy: { actor: MATT, role: "creator" }, waiting: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
+    d.createTask({ title: "Other Alex task", delegatedBy: { actor: MATT, role: "creator" }, waitingOn: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
     const r = reconcile(store, env({ reference: undefined }), SYS);
     expect(r.verdict).toBe("escalated");
 
@@ -139,7 +139,7 @@ describe("reconcile flow (U6)", () => {
 
   it("escalation 'attach to X' after X went terminal is a safe error", () => {
     const t = dinnerWaitingOnAlex();
-    d.createTask({ title: "Other", delegatedBy: { actor: MATT, role: "creator" }, waiting: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
+    d.createTask({ title: "Other", delegatedBy: { actor: MATT, role: "creator" }, waitingOn: { onActor: "act_alex", since: "2026-06-09" } }, MATT);
     const r = reconcile(store, env({ reference: undefined }), SYS);
     d.markDone(t.id, MATT); // X becomes terminal before the human resolves
     expect(() => resolveEscalation(store, r.decision!, t.id, MATT)).toThrowError(/done|dropped/);

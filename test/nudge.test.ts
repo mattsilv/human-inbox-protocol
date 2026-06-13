@@ -38,7 +38,7 @@ describe("nudge engine (U5)", () => {
       {
         title: "Dinner with Alex",
         delegatedBy: { actor: MATT, role: "creator" },
-        waiting: { onActor: "act_alex", since: "2026-06-09", cadence },
+        waitingOn: { onActor: "act_alex", since: "2026-06-09", cadence },
       },
       MATT,
     );
@@ -151,7 +151,7 @@ describe("nudge engine (U5)", () => {
     clock.set(base + 3 * DAY + 1000);
 
     // External $EDITOR marks it done; the index/timer still think it's waiting.
-    const done = { ...store.getTask(t.id)!, status: "done" as const, waiting: null };
+    const done = { ...store.getTask(t.id)!, status: "done" as const, waitingOn: null };
     writeFileSync(filePath(store.paths, "task", t.id), serialize("task", done as never));
 
     const r = engine.tick();

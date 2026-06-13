@@ -65,7 +65,7 @@ documentation only.
 and recent events — everything an agent needs to start work, no side-channel context.
 
 **One verb per transition.** `task_update` mutates content fields only and rejects
-`status`/`waiting`; every state change goes through its own verb so the event log is
+`status`/`waitingOn`; every state change goes through its own verb so the event log is
 unambiguous and invariants live inside the verb.
 
 ## Block → resume (no server-initiated requests)
