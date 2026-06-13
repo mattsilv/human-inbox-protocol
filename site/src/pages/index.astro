@@ -1,0 +1,271 @@
+---
+import "../styles/global.css";
+
+// HIP — the agent↔human interaction protocol.
+// Single-route static pitch page. Copy is drawn from the project README and the
+// "coffee read" narrative; palette mirrors src/cli/tty.ts.
+
+const primitives = [
+  {
+    glyph: "◇",
+    name: "Task",
+    def: "a persistent unit of work",
+    body: `<p class="quote">"Put the suitcase by the door."</p>
+      <p class="meta">An agent notices your flight tomorrow and drops it in your
+      lap. It waits — in the physical world, on your time — until it's done.</p>`,
+  },
+  {
+    glyph: "?",
+    name: "Decision",
+    def: "one question, one tap",
+    body: `<p class="quote">"Laundry — delicate or normal cycle?"</p>
+      <p class="meta">Your household agent hits an edge case mid-task and asks.
+      Options, a snooze, an expiry. Answer in a single keystroke.</p>`,
+  },
+  {
+    glyph: "•",
+    name: "Status",
+    def: "the blocker that lets agents sleep",
+    body: `<p><span class="pending">⊘ Pending</span> until you choose. The agent
+      goes to sleep — no live session held open. The moment you answer, it
+      <span class="ok">wakes back up</span> and executes.</p>`,
+  },
+  {
+    glyph: "⏰",
+    name: "Nudge",
+    def: "the follow-up that fires on time",
+    body: `<p class="quote">"Dinner with Alex" — still unconfirmed at 5:00 PM.</p>
+      <p class="meta">A GTD "waiting-for" with an agent-addressable timer. If you
+      haven't acted by the deadline, HIP reminds you. Once.</p>`,
+  },
+  {
+    glyph: "↺",
+    name: "Reconcile",
+    def: "close the loop, update memory",
+    body: `<p class="quote">"Did dinner happen? What was discussed?"</p>
+      <p class="meta">The next morning the agent pings you to attach what really
+      happened back to the task — so its long-term memory stays true.</p>`,
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>HIP — the agent↔human interaction protocol</title>
+    <meta
+      name="description"
+      content="HIP (Human Inbox Protocol) is a shared, persistent inbox for you and your AI agents — tasks, decisions, nudges, and reconcile flows that outlive any single agent's runtime."
+    />
+    <meta property="og:title" content="HIP — Human Inbox Protocol" />
+    <meta
+      property="og:description"
+      content="A universal answering machine and async to-do list shared between you and all your AI agents."
+    />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="wrap">
+        <a class="brand" href="/"><span class="caret">▮</span> hip</a>
+        <nav>
+          <a href="#problem">problem</a>
+          <a href="#primitives">primitives</a>
+          <a href="#start">get started</a>
+          <a href="#docs">docs</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <!-- HERO -->
+      <section class="hero">
+        <div class="wrap">
+          <p class="eyebrow reveal" style="animation-delay:.02s">
+            Human Inbox Protocol · v0.1
+          </p>
+          <h1 class="reveal" style="animation-delay:.06s">
+            HIP<span class="dot">.</span>
+          </h1>
+          <p class="tagline reveal" style="animation-delay:.14s">
+            the agent<span class="arrows">↔</span>human interaction protocol
+          </p>
+          <p class="lede reveal" style="animation-delay:.22s">
+            A universal answering machine and async to-do list
+            <strong>shared between you and all your AI agents</strong>. They drop
+            requests into your lap and follow up intelligently — over days, across
+            platforms.
+          </p>
+          <div class="cmd reveal" style="animation-delay:.32s" id="cmd">
+            <span class="prompt">$</span>
+            <span class="typed" id="typed"></span><span class="cursor"></span>
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- PROBLEM -->
+      <section class="block" id="problem">
+        <div class="wrap">
+          <p class="eyebrow">The problem</p>
+          <h2>Today, an agent is a phone call.</h2>
+          <p class="section-lead">
+            Close the window and the session ends. If an agent needs you to do
+            something in the physical world, approve a decision tomorrow, or
+            follow up on a long-running process, it loses track of you. HIP fixes
+            the layer everyone skipped: the
+            <strong>persistence of attention</strong> — work that outlives any
+            single agent's runtime, on any platform.
+          </p>
+
+          <div class="priorart">
+            <div class="row">
+              <span class="who">AG-UI</span><span class="arrow">→</span>
+              <span class="what">the synchronous, real-time user interface</span>
+            </div>
+            <div class="row">
+              <span class="who">Hermes · OpenClaw</span><span class="arrow"
+                >→</span
+              >
+              <span class="what">specific human-in-the-loop interventions</span>
+            </div>
+            <div class="row">
+              <span class="who">HAP · HAIP · A2H</span><span class="arrow"
+                >→</span
+              >
+              <span class="what">agent-to-human messaging</span>
+            </div>
+            <div class="row is-hip">
+              <span class="who">HIP</span><span class="arrow">→</span>
+              <span class="what"
+                >tasks that outlive any single agent's runtime — anywhere</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- PRIMITIVES -->
+      <section class="block" id="primitives">
+        <div class="wrap">
+          <p class="eyebrow">How it works</p>
+          <h2>Five primitives. One inbox.</h2>
+          <p class="section-lead">
+            Not abstract concepts — building blocks you'd meet on an ordinary
+            day.
+          </p>
+
+          <div class="primitives">
+            {
+              primitives.map((p) => (
+                <article class="prim">
+                  <div class="name">
+                    <span class="glyph">{p.glyph}</span>
+                    <h3>{p.name}</h3>
+                  </div>
+                  <p class="def">{p.def}</p>
+                  <div class="body" set:html={p.body} />
+                </article>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- GET STARTED -->
+      <section class="block" id="start">
+        <div class="wrap">
+          <p class="eyebrow">Get started</p>
+          <h2>Run the reference implementation.</h2>
+          <p class="section-lead">
+            A local daemon over markdown + SQLite, an MCP server agents file into,
+            and a one-decision-at-a-time terminal inbox. macOS, Node 20+.
+          </p>
+
+          <div class="terminal">
+            <div class="chrome">
+              <span class="led"></span><span class="led"></span><span
+                class="led"></span>
+              <span class="title">hip — install</span>
+            </div>
+            <div class="body">
+              <div class="c"><span class="p">$ </span><span class="cmdtext"
+                  >npm run setup</span
+                ><span class="cm">    # deps · build · native binding · PATH · seed</span
+                ></div>
+              <div class="out"><span class="ok">✓</span> hip linked onto your PATH</div>
+              <div class="c" style="margin-top:.6rem"><span class="p">$ </span
+                ><span class="cmdtext">hip serve</span><span class="cm"
+                  >       # foreground daemon (or load the LaunchAgent)</span
+                ></div>
+              <div class="c"><span class="p">$ </span><span class="cmdtext"
+                  >hip demo</span
+                ><span class="cm">        # seed one example per scenario, then walk them</span
+                ></div>
+              <div class="c"><span class="p">$ </span><span class="cmdtext"
+                  >hip inbox</span
+                ><span class="cm">       # walk every pending decision interactively</span
+                ></div>
+            </div>
+          </div>
+
+          <p class="note">
+            The inbox is number-keyed — type <code>1</code>, <code>2</code>,
+            <code>3</code> to pick, <code>s</code> to snooze, <code>d</code> to
+            dismiss. It's TTY-gated: piping, CI, or <code>--plain</code> fall back
+            to clean ANSI-free output, and <code>NO_COLOR</code> is honored.
+          </p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- FOOTER -->
+      <footer class="site" id="docs">
+        <div class="wrap">
+          <p class="eyebrow">Docs &amp; spec</p>
+          <div class="links">
+            <!-- TODO repo url: no git remote set yet -->
+            <a href="#">GitHub repo →</a>
+            <a href="#">Spec (v0.1) →</a>
+            <a href="#">MCP binding →</a>
+            <a href="#">Hermes integration →</a>
+          </div>
+          <p class="status">
+            <span class="green">●</span> Status: MVP under construction · Schema
+            v0.1 · local-first · MIT
+          </p>
+        </div>
+      </footer>
+    </main>
+
+    <script>
+      // Single motion touch: type the hero command once. Respects reduced-motion.
+      const target = "hip inbox";
+      const el = document.getElementById("typed");
+      const reduce = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      if (el) {
+        if (reduce) {
+          el.textContent = target;
+        } else {
+          let i = 0;
+          const tick = () => {
+            el.textContent = target.slice(0, i);
+            if (i++ <= target.length) setTimeout(tick, 70 + Math.random() * 60);
+          };
+          setTimeout(tick, 520);
+        }
+      }
+    </script>
+  </body>
+</html>

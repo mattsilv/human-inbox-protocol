@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+coverage/
+.claude/worktrees/
+
+# Local HIP data dir if created in-repo during dev
+.hip-dev/
+*.tmp
+
+# Internal-only working docs — kept local, never published
+/SOURCE_LOCATION.md
+/HIP_PROTOCOL_REVIEW_*.md
+docs/brainstorms/
+docs/plans/
