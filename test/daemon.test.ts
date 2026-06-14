@@ -56,6 +56,14 @@ describe("MCP daemon + tool binding (U4)", () => {
     expect((list.tasks as unknown[]).length).toBe(1);
   });
 
+  it("brackets a bare IPv6 HIP_HOST into a valid url authority", () => {
+    const v6 = new HipDaemon({ store, token: TOKEN, host: "fd7a:1:2::3", port: 4319 });
+    expect(v6.url).toBe("http://[fd7a:1:2::3]:4319/mcp");
+    // IPv4 / hostnames pass through unchanged.
+    const v4 = new HipDaemon({ store, token: TOKEN, host: "100.64.0.1", port: 4319 });
+    expect(v4.url).toBe("http://100.64.0.1:4319/mcp");
+  });
+
   it("tags round-trip over MCP: task_create tags, task_list filters by tag, task_read returns them", async () => {
     const gap = (await client.callOk("task_create", {
       actorId: MATT,
