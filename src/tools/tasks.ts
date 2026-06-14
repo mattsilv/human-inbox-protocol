@@ -24,6 +24,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
         place: z.string().optional(),
         delegatedBy: zDelegatedBy,
         references: z.array(zReference).optional(),
+        tags: z.array(z.string()).optional().describe('Flat labels, e.g. ["protocol-gap"] for a dogfood gap'),
         waitingOn: zWaiting.optional(),
       },
     },
@@ -40,6 +41,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
             ...(a.place ? { place: a.place } : {}),
             delegatedBy: a.delegatedBy,
             ...(a.references ? { references: a.references as Reference[] } : {}),
+            ...(a.tags ? { tags: a.tags } : {}),
             ...(a.waitingOn ? { waitingOn: a.waitingOn } : {}),
           },
           a.actorId,
@@ -80,10 +82,18 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
     "task_list",
     {
       title: "List tasks",
-      description: "All tasks, optionally filtered by status.",
-      inputSchema: { status: z.enum(["open", "waiting", "done", "dropped"]).optional() },
+      description: "All tasks, optionally filtered by status and/or tag (AND-combined).",
+      inputSchema: {
+        status: z.enum(["open", "waiting", "done", "dropped"]).optional(),
+        tag: z.string().optional().describe('Filter by a tag, e.g. "protocol-gap"'),
+      },
     },
-    async (a) => guard(() => ok({ tasks: domain.listTasks(a.status ? { status: a.status } : undefined).map(wire) })),
+    async (a) =>
+      guard(() => {
+        const filter = { ...(a.status ? { status: a.status } : {}), ...(a.tag ? { tag: a.tag } : {}) };
+        const tasks = domain.listTasks(Object.keys(filter).length ? filter : undefined).map(wire);
+        return ok({ tasks });
+      }),
   );
 
   server.registerTool(

@@ -24,6 +24,7 @@ export interface CreateTaskInput {
   place?: string;
   delegatedBy: DelegatedBy;
   references?: Reference[];
+  tags?: string[];
   waitingOn?: Waiting;
   _meta?: Record<string, unknown>;
 }
@@ -68,6 +69,12 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   if (input.due !== undefined) task.due = input.due;
   if (input.place) task.place = input.place;
   if (input.references) task.references = input.references;
+  // De-duplicate tags, preserving first-occurrence order; drop empty to keep the
+  // optional-field convention (absent, not []).
+  if (input.tags?.length) {
+    const tags = [...new Set(input.tags.filter((t) => t))];
+    if (tags.length) task.tags = tags;
+  }
   if (input._meta) task._meta = input._meta;
 
   store.writeObjects(
@@ -205,7 +212,7 @@ export function orient(store: Store, id: string): TaskView | null {
   };
 }
 
-export function listTasks(store: Store, filter?: { status?: TaskStatus }): Task[] {
+export function listTasks(store: Store, filter?: { status?: TaskStatus; tag?: string }): Task[] {
   return store.listTasks(filter);
 }
 
