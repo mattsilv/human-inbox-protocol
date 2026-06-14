@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { Store, reindex, doctor, newId, filePath } from "../src/store/index.js";
+import Database from "better-sqlite3";
+import { Store, reindex, doctor, newId, filePath, openDb, SCHEMA_VERSION } from "../src/store/index.js";
 import { serialize, deserialize, liftTaskState, lowerTaskState } from "../src/store/index.js";
 import type { Task, TaskState, HipEvent } from "../src/types.js";
 import { tmpRoot, cleanup, makeTask, FakeClock } from "./helpers.js";
@@ -221,6 +222,86 @@ describe("store layer (U2)", () => {
     expect(typeof log.append).toBe("function");
     expect(log.update).toBeUndefined();
     expect(log.delete).toBeUndefined();
+  });
+});
+
+describe("schema migration v1→v2 (task_tag)", () => {
+  it("upgrades a v1 DB: creates task_tag, bumps user_version, preserves rows", () => {
+    const root = tmpRoot();
+    const dbFile = join(root, "hip.db");
+    // Hand-build a v1 store: task_index only, no task_tag, user_version = 1.
+    const raw = new Database(dbFile);
+    raw.exec(
+      `CREATE TABLE task_index (id TEXT PRIMARY KEY, title TEXT, status TEXT, next_action_on TEXT,
+        waiting_on_actor TEXT, priority TEXT, content_hash TEXT, created_at TEXT, updated_at TEXT);`,
+    );
+    raw.prepare(`INSERT INTO task_index (id, title, status) VALUES ('tsk_a','keep','open')`).run();
+    raw.pragma("user_version = 1");
+    raw.close();
+
+    const db = openDb(dbFile);
+    expect(SCHEMA_VERSION).toBe(2);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    const tbl = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_tag'`)
+      .get();
+    expect(tbl).toBeTruthy();
+    expect(db.prepare(`SELECT title FROM task_index WHERE id='tsk_a'`).get()).toEqual({
+      title: "keep",
+    });
+    db.close();
+    cleanup(root);
+  });
+
+  it("opening an already-v2 DB is an idempotent no-op", () => {
+    const root = tmpRoot();
+    const dbFile = join(root, "hip.db");
+    const db1 = openDb(dbFile);
+    expect(db1.pragma("user_version", { simple: true })).toBe(2);
+    db1.close();
+    const db2 = openDb(dbFile);
+    expect(db2.pragma("user_version", { simple: true })).toBe(2);
+    db2.close();
+    cleanup(root);
+  });
+});
+
+describe("task_tag indexing (U2)", () => {
+  let root: string;
+  let store: Store;
+  beforeEach(() => {
+    root = tmpRoot();
+    store = new Store({ root });
+  });
+  afterEach(() => {
+    store.close();
+    cleanup(root);
+  });
+
+  function tagRows(taskId: string): string[] {
+    return (
+      store.db.prepare(`SELECT tag FROM task_tag WHERE task_id = ? ORDER BY tag`).all(taskId) as {
+        tag: string;
+      }[]
+    ).map((r) => r.tag);
+  }
+
+  it("indexes tag rows; re-indexing with a tag removed leaves no stale row", () => {
+    const t = makeTask(store, { title: "gap", tags: ["protocol-gap", "infra"] });
+    expect(tagRows(t.id)).toEqual(["infra", "protocol-gap"]);
+
+    // Rewrite the task with one tag removed → stale row must be gone.
+    const obj = { ...store.getTask(t.id)!, tags: ["protocol-gap"] };
+    store.writeObjects([{ type: "task", obj: obj as unknown as Record<string, unknown> }], []);
+    expect(tagRows(t.id)).toEqual(["protocol-gap"]);
+  });
+
+  it("reindex repopulates task_tag from frontmatter", () => {
+    const t = makeTask(store, { title: "gap", tags: ["protocol-gap"] });
+    store.db.exec(`DELETE FROM task_tag`);
+    expect(tagRows(t.id)).toEqual([]);
+    reindex(store);
+    expect(tagRows(t.id)).toEqual(["protocol-gap"]);
   });
 });
 
