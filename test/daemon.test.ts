@@ -56,6 +56,29 @@ describe("MCP daemon + tool binding (U4)", () => {
     expect((list.tasks as unknown[]).length).toBe(1);
   });
 
+  it("tags round-trip over MCP: task_create tags, task_list filters by tag, task_read returns them", async () => {
+    const gap = (await client.callOk("task_create", {
+      actorId: MATT,
+      title: "no recurrence support",
+      delegatedBy: { actor: MATT, role: "creator" },
+      tags: ["protocol-gap"],
+    })) as { id: string };
+    await client.callOk("task_create", {
+      actorId: MATT,
+      title: "ordinary task",
+      delegatedBy: { actor: MATT, role: "creator" },
+    });
+
+    const filtered = (await client.callOk("task_list", { tag: "protocol-gap" })) as {
+      tasks: { id: string; tags?: string[] }[];
+    };
+    expect(filtered.tasks.map((t) => t.id)).toEqual([gap.id]);
+    expect(filtered.tasks[0]!.tags).toEqual(["protocol-gap"]);
+
+    const view = await client.callOk("task_read", { id: gap.id });
+    expect((view.task as { tags?: string[] }).tags).toEqual(["protocol-gap"]);
+  });
+
   it("the internal union never crosses the wire — tasks stay flat (status + waitingOn)", async () => {
     const created = (await client.callOk("task_create", {
       actorId: MATT,

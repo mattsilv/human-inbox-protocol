@@ -15,8 +15,32 @@ one to the other is a transport change, not a redesign.
 - **JSON responses** (`enableJsonResponse: true`). One request, one JSON reply.
 - **Only `POST /mcp` carries HIP semantics.** `GET`/`DELETE` (SSE streams, session
   teardown) are refused with `405`. The daemon opens **no** server→client stream.
-- **DNS-rebinding protection** on: `Host` and `Origin` are validated against the
-  localhost allowlist; a mismatched `Origin` is rejected with `403`.
+- **DNS-rebinding protection** on: `Host` and `Origin` are validated against an
+  allowlist (loopback + the configured bind host); a mismatched `Host`/`Origin` is
+  rejected with `403`.
+
+## Remote agents (Tailscale binding)
+
+The daemon binds to whatever `HIP_HOST` names (`DEFAULT_HOST = 127.0.0.1`); the
+LaunchAgent plist carries it as an env var. To let an **off-box agent** reach the
+daemon — e.g. an agent on another machine driving HIP as a client — bind to the dev
+machine's **Tailscale** interface instead of loopback:
+
+```
+HIP_HOST=<this-machine-tailscale-ip>   # in the LaunchAgent plist env, then reload
+```
+
+The agent points at `http://<this-machine-tailscale-ip>:4319/mcp` with the same
+`Authorization: Bearer <token>`. No `--host` flag is needed for v1 — the env var drives
+the bind host, and the daemon adds that host to its DNS-rebinding allowlist so the
+remote `Host` header is accepted. (Connect by the **IP** that `HIP_HOST` was set to; a
+MagicDNS name only works if `HIP_HOST` is set to that exact name, since the `Host`
+header must match the allowlisted bind host.)
+
+> **Security:** binding beyond `127.0.0.1` removes loopback as the network gate, so the
+> **bearer token becomes the only thing standing between the tailnet and your store.**
+> Pair it with Tailscale ACLs restricting who can reach port `4319`, keep the token
+> `0600`, and **never bind `0.0.0.0`.** Loopback-only stays the default for a reason.
 
 ## Authentication & identity
 

@@ -46,14 +46,24 @@ export class HipDaemon {
     return `http://${this.host}:${this.listenPort}/mcp`;
   }
 
+  // The configured `host` is added to both allowlists so a non-loopback bind (e.g. a
+  // Tailscale IP, HIP_HOST) accepts its own Host/Origin — without it DNS-rebinding
+  // protection 403s every remote call. Loopback stays allowed for local clients.
   private get allowedHosts(): string[] {
     const p = this.listenPort;
-    return [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`];
+    return [...new Set([`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`, `${this.host}:${p}`])];
   }
 
   private get allowedOrigins(): string[] {
     const p = this.listenPort;
-    return [`http://127.0.0.1:${p}`, `http://localhost:${p}`, `http://[::1]:${p}`];
+    return [
+      ...new Set([
+        `http://127.0.0.1:${p}`,
+        `http://localhost:${p}`,
+        `http://[::1]:${p}`,
+        `http://${this.host}:${p}`,
+      ]),
+    ];
   }
 
   async start(): Promise<void> {
