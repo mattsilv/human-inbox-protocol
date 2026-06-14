@@ -48,6 +48,22 @@ describe("store layer (U2)", () => {
     expect(store.getTask(t.id)!.state.kind).toBe("done");
   });
 
+  it("round-trips tags through frontmatter; absent tags omit the key", () => {
+    const t = makeTask(store, { title: "gap", tags: ["protocol-gap", "infra"] });
+    const path = filePath(store.paths, "task", t.id);
+    const raw = readFileSync(path, "utf8");
+    expect(raw).toContain("tags:");
+    expect(raw).toContain("protocol-gap");
+
+    const back = store.getTask(t.id)!;
+    expect(back.tags).toEqual(["protocol-gap", "infra"]); // order preserved
+
+    // A task with no tags writes no `tags:` key (optional-field convention).
+    const plain = makeTask(store, { title: "no tags" });
+    expect(readFileSync(filePath(store.paths, "task", plain.id), "utf8")).not.toContain("tags:");
+    expect(store.getTask(plain.id)!.tags).toBeUndefined();
+  });
+
   it("reindex rebuilds the index from files and is idempotent", () => {
     const a = makeTask(store, { title: "a" });
     makeTask(store, { title: "b", state: { kind: "done" } });
