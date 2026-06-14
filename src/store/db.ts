@@ -2,12 +2,13 @@ import Database from "better-sqlite3";
 import { ensureDir } from "./atomic.js";
 import { dirname } from "node:path";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // Tables rebuilt from files by `reindex`. Everything here is a cache of file truth.
 const DERIVED_TABLES = [
   "task_index",
   "task_reference",
+  "task_tag",
   "thread_envelope",
   "decision_index",
   "entity_index",
@@ -37,6 +38,15 @@ CREATE TABLE IF NOT EXISTS task_reference (
   PRIMARY KEY (task_id, global_id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_ref_global ON task_reference(global_id);
+
+-- Filterable multi-valued task labels (1:many side table, mirrors task_reference).
+-- protocol-gap is the dogfood gap marker queried by task_list tag filter / hip-gaps.
+CREATE TABLE IF NOT EXISTS task_tag (
+  task_id TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (task_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_task_tag_tag ON task_tag(tag);
 
 -- Reconcile idempotency marker: which task a processed envelope landed in. Derived
 -- from thread frontmatter, so it survives reindex and is the file-layer guard that
@@ -134,9 +144,13 @@ export function openDb(dbFile: string): Db {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("busy_timeout = 5000");
+  // SCHEMA is all `IF NOT EXISTS`, so it brings any older DB up to the current table
+  // set on open (e.g. task_tag for a v1 store). The version pragma is bookkeeping:
+  // a fresh DB (0) and any pre-HEAD DB both advance to SCHEMA_VERSION; an existing
+  // v1 store keeps its rows — the migration is additive (new table only).
   db.exec(SCHEMA);
   const current = db.pragma("user_version", { simple: true }) as number;
-  if (current === 0) db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  if (current < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
   return db;
 }
 

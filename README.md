@@ -100,5 +100,5 @@ src/daemon/   HTTP server, auth, MCP wiring, nudge engine
 src/domain/   tasks, decisions, reconcile, entities, executions, state machines
 src/store/    markdown read/write, SQLite, event log, reindex
 src/tools/    MCP tool definitions (the binding)
-skills/       hip-dogfood skill
+skills/       hip-dogfood (file gaps) + hip-gaps (rank gaps, offer /ce-plan)
 ```

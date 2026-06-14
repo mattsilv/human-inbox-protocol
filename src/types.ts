@@ -104,6 +104,7 @@ export interface Task {
   place?: string; // Entity(place) ref
   delegatedBy: DelegatedBy; // REQUIRED provenance
   references?: Reference[];
+  tags?: string[]; // flat labels; `protocol-gap` is the dogfood gap marker (indexed in task_tag)
   thread?: ThreadEntry[];
   createdAt: Iso;
   updatedAt: Iso;

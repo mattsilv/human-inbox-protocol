@@ -178,14 +178,25 @@ export class Store {
       .map((f) => f.slice(0, -3));
   }
 
-  listTasks(filter?: { status?: TaskStatus }): Task[] {
-    const rows = filter?.status
-      ? (this.db
-          .prepare(`SELECT id FROM task_index WHERE status = ? ORDER BY created_at`)
-          .all(filter.status) as { id: string }[])
-      : (this.db.prepare(`SELECT id FROM task_index ORDER BY created_at`).all() as {
-          id: string;
-        }[]);
+  listTasks(filter?: { status?: TaskStatus; tag?: string }): Task[] {
+    // `tag` joins the task_tag index; `status` and `tag` AND-combine when both given.
+    const from = filter?.tag
+      ? `task_index ti JOIN task_tag tt ON tt.task_id = ti.id`
+      : `task_index ti`;
+    const conds: string[] = [];
+    const params: string[] = [];
+    if (filter?.tag) {
+      conds.push("tt.tag = ?");
+      params.push(filter.tag);
+    }
+    if (filter?.status) {
+      conds.push("ti.status = ?");
+      params.push(filter.status);
+    }
+    const where = conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(`SELECT ti.id FROM ${from}${where} ORDER BY ti.created_at`)
+      .all(...params) as { id: string }[];
     return rows.map((r) => this.getTask(r.id)).filter((t): t is Task => t !== null);
   }
 

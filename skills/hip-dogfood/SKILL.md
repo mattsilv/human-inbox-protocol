@@ -66,16 +66,20 @@ before proceeding**:
 If HIP has no tool for what you need (e.g. recurrence, subtasks, a richer query):
 
 1. **Stop.** Do not build a workaround in your own state.
-2. File the gap as a HIP task tagged as a protocol gap:
+2. File the gap as a HIP task carrying the `protocol-gap` tag:
    ```
    task_create {
      actorId: "<you>",
-     title: "PROTOCOL-GAP: <what's missing>",
+     title: "<what's missing, in plain words>",
      description: "<the concrete thing you tried to do and the tool you wished existed>",
      delegatedBy: { actor: "<you>", role: "creator" },
-     _meta: { protocolGap: true }
+     tags: ["protocol-gap"]
    }
    ```
+   The `tags` field is real, indexed protocol — gaps are queryable later via
+   `task_list { tag: "protocol-gap" }` (and surfaced, frequency-ranked, by the
+   `/hip-gaps` skill). Do **not** pass `_meta` for this — request `_meta` rides the
+   wire envelope and is never stored.
 3. Tell Matt: "HIP can't do X yet — I filed it as a protocol-gap task and stopped."
 
 ### 2. Workaround divergence
@@ -91,4 +95,4 @@ protocol hides exactly the gap dogfooding exists to find.
 - Every "I'm waiting on someone" lives in a task's `waitingOn`, not your memory.
 - Every "I need Matt to decide" is a `task_block` / decision, surfaced in `hip inbox`.
 - Every inbound reply goes through `reconcile_submit`.
-- Every gap is a `PROTOCOL-GAP` task, not a silent workaround.
+- Every gap is a `protocol-gap`-tagged task, not a silent workaround.

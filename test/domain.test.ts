@@ -51,6 +51,42 @@ describe("domain layer (U3)", () => {
     ]);
   });
 
+  it("tags: create stores tags, list filters by tag, status+tag AND-combine", () => {
+    const gap = d.createTask(
+      { title: "gap a", tags: ["protocol-gap"], delegatedBy: { actor: MATT, role: "creator" } },
+      MATT,
+    );
+    expect(gap.tags).toEqual(["protocol-gap"]);
+    const plain = d.createTask({ title: "plain", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+
+    const tagged = d.listTasks({ tag: "protocol-gap" }).map((t) => t.id);
+    expect(tagged).toContain(gap.id);
+    expect(tagged).not.toContain(plain.id);
+
+    // status + tag AND-combine: once done, the gap drops out of the open+tag filter.
+    d.markDone(gap.id, MATT);
+    expect(d.listTasks({ status: "open", tag: "protocol-gap" }).map((t) => t.id)).not.toContain(gap.id);
+    expect(d.listTasks({ status: "done", tag: "protocol-gap" }).map((t) => t.id)).toContain(gap.id);
+
+    // task_read DTO surfaces tags.
+    expect(d.orient(gap.id)!.task.tags).toEqual(["protocol-gap"]);
+  });
+
+  it("tags: empty array stores nothing; duplicates de-duplicate", () => {
+    const empty = d.createTask(
+      { title: "empty", tags: [], delegatedBy: { actor: MATT, role: "creator" } },
+      MATT,
+    );
+    expect(empty.tags).toBeUndefined();
+    expect(d.listTasks({ tag: "protocol-gap" }).map((t) => t.id)).not.toContain(empty.id);
+
+    const dup = d.createTask(
+      { title: "dup", tags: ["x", "x", "y"], delegatedBy: { actor: MATT, role: "creator" } },
+      MATT,
+    );
+    expect(dup.tags).toEqual(["x", "y"]);
+  });
+
   it("rejects task create without provenance and any mutation without an actor", () => {
     expect(() =>
       d.createTask({ title: "x", delegatedBy: { actor: "", role: "creator" } }, MATT),

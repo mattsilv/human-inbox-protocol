@@ -33,6 +33,12 @@ export function indexTask(db: Db, task: Task, hash: string): void {
     if (ref.globalId) insRef.run(task.id, ref.globalId);
   }
 
+  db.prepare(`DELETE FROM task_tag WHERE task_id = ?`).run(task.id);
+  const insTag = db.prepare(`INSERT OR IGNORE INTO task_tag (task_id, tag) VALUES (?, ?)`);
+  for (const tag of task.tags ?? []) {
+    if (tag) insTag.run(task.id, tag);
+  }
+
   // Reconcile idempotency markers: every envelope id that landed in this thread.
   db.prepare(`DELETE FROM thread_envelope WHERE task_id = ?`).run(task.id);
   const insEnv = db.prepare(
@@ -104,6 +110,7 @@ export function deindex(db: Db, type: string, id: string): void {
     case "task":
       db.prepare(`DELETE FROM task_index WHERE id = ?`).run(id);
       db.prepare(`DELETE FROM task_reference WHERE task_id = ?`).run(id);
+      db.prepare(`DELETE FROM task_tag WHERE task_id = ?`).run(id);
       db.prepare(`DELETE FROM thread_envelope WHERE task_id = ?`).run(id);
       db.prepare(`DELETE FROM timers WHERE task_id = ?`).run(id);
       break;

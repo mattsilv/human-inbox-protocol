@@ -43,17 +43,28 @@ export class HipDaemon {
   }
 
   get url(): string {
-    return `http://${this.host}:${this.listenPort}/mcp`;
+    return `http://${hostPort(this.host, this.listenPort)}/mcp`;
   }
 
+  // The configured `host` is added to both allowlists so a non-loopback bind (e.g. a
+  // Tailscale IP, HIP_HOST) accepts its own Host/Origin — without it DNS-rebinding
+  // protection 403s every remote call. Loopback stays allowed for local clients.
+  // `hostPort` brackets bare IPv6 literals so they match the `[v6]:port` Host header.
   private get allowedHosts(): string[] {
     const p = this.listenPort;
-    return [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`];
+    return [...new Set([`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`, hostPort(this.host, p)])];
   }
 
   private get allowedOrigins(): string[] {
     const p = this.listenPort;
-    return [`http://127.0.0.1:${p}`, `http://localhost:${p}`, `http://[::1]:${p}`];
+    return [
+      ...new Set([
+        `http://127.0.0.1:${p}`,
+        `http://localhost:${p}`,
+        `http://[::1]:${p}`,
+        `http://${hostPort(this.host, p)}`,
+      ]),
+    ];
   }
 
   async start(): Promise<void> {
@@ -146,4 +157,14 @@ function readJson(req: IncomingMessage): Promise<unknown> {
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+/**
+ * `host:port`, bracketing a bare IPv6 literal (e.g. `fd7a:…` → `[fd7a:…]`) so it matches
+ * the `[v6]:port` form a client sends in the Host header and forms a valid URL authority.
+ * Already-bracketed (`[::1]`) and IPv4/hostnames pass through unchanged.
+ */
+function hostPort(host: string, port: number): string {
+  const h = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `${h}:${port}`;
 }
