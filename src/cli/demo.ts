@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import * as clack from "@clack/prompts";
 import type { HipClient } from "../client.js";
-import type { Task, Decision } from "../types.js";
+import type { WireTask, Decision } from "../types.js";
 import { withClient, withClientVoid } from "./run.js";
 import { spin, colorHeading, colorDim, glyph, isInteractive } from "./tty.js";
 import { interactiveInbox } from "./interactive.js";
@@ -101,7 +101,7 @@ async function waitingTask(
   return id;
 }
 
-function isDemoTask(t: Task): boolean {
+function isDemoTask(t: WireTask): boolean {
   return (t._meta as { demo?: unknown } | undefined)?.demo === true;
 }
 function isDemoDecision(d: Decision, demoTaskIds: Set<string>): boolean {
@@ -116,7 +116,7 @@ function isDemoDecision(d: Decision, demoTaskIds: Set<string>): boolean {
  * reconcile envelopes), so real tasks are untouched.
  */
 async function resetDemo(client: HipClient, owner: string): Promise<void> {
-  const { tasks } = (await client.callOk("task_list")) as { tasks: Task[] };
+  const { tasks } = (await client.callOk("task_list")) as { tasks: WireTask[] };
   const demoTasks = tasks.filter(isDemoTask);
   const demoTaskIds = new Set(demoTasks.map((t) => t.id));
 

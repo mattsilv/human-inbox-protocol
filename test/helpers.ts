@@ -35,7 +35,7 @@ export function makeTask(store: Store, over: Partial<Task> = {}): Task {
   const task: Task = {
     id,
     title: `task ${seq++}`,
-    status: "open",
+    state: { kind: "open" },
     delegatedBy: { actor: "act_matt", role: "creator" },
     createdAt: now,
     updatedAt: now,

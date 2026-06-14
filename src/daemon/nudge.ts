@@ -69,7 +69,7 @@ export class NudgeEngine {
 
     for (const { task_id } of this.store.dueTimers(now)) {
       const task = this.store.getTask(task_id);
-      if (!task || task.status !== "waiting" || !task.waitingOn?.cadence) {
+      if (!task || task.state.kind !== "waiting" || !task.state.cadence) {
         // Task left `waiting` (possibly via external edit) — drop the stale timer.
         this.store.removeTimer(task_id);
         continue;
@@ -109,8 +109,9 @@ export class NudgeEngine {
 }
 
 function nudgePrompt(task: Task, now: number): string {
-  const onActor = task.waitingOn?.onActor ?? "someone";
-  const since = task.waitingOn?.lastNudge ?? task.waitingOn?.since;
+  const waiting = task.state.kind === "waiting" ? task.state : null;
+  const onActor = waiting?.onActor ?? "someone";
+  const since = waiting?.lastNudge ?? waiting?.since;
   const days = since ? Math.max(0, Math.floor((now - Date.parse(since)) / 86_400_000)) : null;
   const lead = days !== null ? `${days} day${days === 1 ? "" : "s"} since you last checked` : "Following up";
   return `${lead} on "${task.title}" — you're waiting on ${onActor}. Follow up?`;

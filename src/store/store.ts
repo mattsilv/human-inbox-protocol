@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import type {
   ObjectType,
   Task,
+  TaskStatus,
   Decision,
   Entity,
   Actor,
@@ -177,7 +178,7 @@ export class Store {
       .map((f) => f.slice(0, -3));
   }
 
-  listTasks(filter?: { status?: Task["status"] }): Task[] {
+  listTasks(filter?: { status?: TaskStatus }): Task[] {
     const rows = filter?.status
       ? (this.db
           .prepare(`SELECT id FROM task_index WHERE status = ? ORDER BY created_at`)

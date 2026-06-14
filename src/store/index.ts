@@ -7,3 +7,4 @@ export { parseDuration, addDuration } from "./duration.js";
 export { EventLog } from "./events.js";
 export { openDb, SCHEMA_VERSION } from "./db.js";
 export { serialize, deserialize } from "./markdown.js";
+export { liftTaskState, lowerTaskState } from "./task-state.js";

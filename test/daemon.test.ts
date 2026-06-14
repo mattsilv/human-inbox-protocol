@@ -56,6 +56,32 @@ describe("MCP daemon + tool binding (U4)", () => {
     expect((list.tasks as unknown[]).length).toBe(1);
   });
 
+  it("the internal union never crosses the wire — tasks stay flat (status + waitingOn)", async () => {
+    const created = (await client.callOk("task_create", {
+      actorId: MATT,
+      title: "Dinner with Alex",
+      delegatedBy: { actor: MATT, role: "creator" },
+      waitingOn: { onActor: "act_alex", since: "2026-06-09", cadence: "P3D" },
+    })) as Record<string, unknown>;
+    // task_create return is flat.
+    expect(created.status).toBe("waiting");
+    expect((created.waitingOn as { onActor: string }).onActor).toBe("act_alex");
+    expect(created.state).toBeUndefined();
+
+    // task_read (nested) is flat.
+    const view = await client.callOk("task_read", { id: created.id as string });
+    const read = view.task as Record<string, unknown>;
+    expect(read.status).toBe("waiting");
+    expect(read.state).toBeUndefined();
+
+    // task_list (array) is flat.
+    const list = await client.callOk("task_list", { status: "waiting" });
+    for (const t of list.tasks as Record<string, unknown>[]) {
+      expect(t.status).toBeDefined();
+      expect(t.state).toBeUndefined();
+    }
+  });
+
   it("AE6: task_block files a decision, blocks the execution, resolve resumes it", async () => {
     const t = (await client.callOk("task_create", {
       actorId: MATT,

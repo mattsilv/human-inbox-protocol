@@ -41,7 +41,10 @@ const CONTENT_FIELDS = new Set([
   "_meta",
 ]);
 
-const TERMINAL: TaskStatus[] = ["done", "dropped"];
+/** Read helper: a task in a terminal state cannot transition further. */
+export function isTerminal(task: Task): boolean {
+  return task.state.kind === "done" || task.state.kind === "dropped";
+}
 
 export function createTask(store: Store, input: CreateTaskInput, actorId: string): Task {
   requireActor(actorId);
@@ -53,7 +56,7 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   const task: Task = {
     id,
     title: input.title,
-    status: waitingOn ? "waiting" : "open",
+    state: waitingOn ? { kind: "waiting", ...normalizeWaiting(waitingOn, now) } : { kind: "open" },
     delegatedBy: input.delegatedBy,
     createdAt: now,
     updatedAt: now,
@@ -66,9 +69,6 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   if (input.place) task.place = input.place;
   if (input.references) task.references = input.references;
   if (input._meta) task._meta = input._meta;
-  if (waitingOn) {
-    task.waitingOn = normalizeWaiting(waitingOn, now);
-  }
 
   store.writeObjects(
     [{ type: "task", obj: task as unknown as Record<string, unknown> }],
@@ -113,15 +113,11 @@ export function setWaiting(
   actorId: string,
 ): Task {
   return mutateMarkdown<Task>(store, "task", id, actorId, (i) => store.loadTask(i), (t) => {
-    if (TERMINAL.includes(t.status)) throw stateError(`cannot change waiting on a ${t.status} task`);
-    if (waitingOn) {
-      t.status = "waiting";
-      t.waitingOn = normalizeWaiting(waitingOn, store.nowIso());
-    } else {
-      t.status = "open";
-      t.waitingOn = null;
-    }
-    return [event(store, id, actorId, "status-changed", { to: t.status })];
+    if (isTerminal(t)) throw stateError(`cannot change waiting on a ${t.state.kind} task`);
+    t.state = waitingOn
+      ? { kind: "waiting", ...normalizeWaiting(waitingOn, store.nowIso()) }
+      : { kind: "open" };
+    return [event(store, id, actorId, "status-changed", { to: t.state.kind })];
   });
 }
 
@@ -133,12 +129,11 @@ export function markDropped(store: Store, id: string, actorId: string): Task {
   return transition(store, id, "dropped", actorId);
 }
 
-function transition(store: Store, id: string, to: TaskStatus, actorId: string): Task {
+function transition(store: Store, id: string, to: "done" | "dropped", actorId: string): Task {
   return mutateMarkdown<Task>(store, "task", id, actorId, (i) => store.loadTask(i), (t) => {
-    if (t.status === to) throw stateError(`task is already ${to}`);
-    if (TERMINAL.includes(t.status)) throw stateError(`task is ${t.status} and cannot transition to ${to}`);
-    t.status = to;
-    t.waitingOn = null;
+    if (t.state.kind === to) throw stateError(`task is already ${to}`);
+    if (isTerminal(t)) throw stateError(`task is ${t.state.kind} and cannot transition to ${to}`);
+    t.state = { kind: to };
     return [event(store, id, actorId, "status-changed", { to })];
   });
 }
@@ -158,7 +153,7 @@ export function appendThread(
 ): { task: Task; appended: boolean } {
   let appended = false;
   const task = mutateMarkdown<Task>(store, "task", id, actorId, (i) => store.loadTask(i), (t) => {
-    if (TERMINAL.includes(t.status) && entry.envelopeId === undefined) {
+    if (isTerminal(t) && entry.envelopeId === undefined) {
       // comments allowed on terminal tasks, but reconcile attaches are guarded elsewhere
     }
     const thread = (t.thread ??= []);
@@ -183,12 +178,12 @@ export function recordNudge(store: Store, id: string, actorId: string): Task | n
   const fresh = store.loadTask(id);
   if (!fresh) return null;
   const t = fresh.obj;
-  if (t.status !== "waiting" || !t.waitingOn) return t;
-  t.waitingOn.lastNudge = store.nowIso();
+  if (t.state.kind !== "waiting") return t;
+  t.state.lastNudge = store.nowIso();
   t.updatedAt = store.nowIso();
   store.writeObjects(
     [{ type: "task", obj: t as unknown as Record<string, unknown> }],
-    [event(store, id, actorId, "nudge-fired", { lastNudge: t.waitingOn.lastNudge })],
+    [event(store, id, actorId, "nudge-fired", { lastNudge: t.state.lastNudge })],
   );
   return t;
 }

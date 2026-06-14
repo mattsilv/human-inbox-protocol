@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { Store, reindex, doctor, newId, filePath } from "../src/store/index.js";
-import { serialize, deserialize } from "../src/store/index.js";
-import type { Task, HipEvent } from "../src/types.js";
+import { serialize, deserialize, liftTaskState, lowerTaskState } from "../src/store/index.js";
+import type { Task, TaskState, HipEvent } from "../src/types.js";
 import { tmpRoot, cleanup, makeTask, FakeClock } from "./helpers.js";
 
 describe("store layer (U2)", () => {
@@ -40,17 +40,17 @@ describe("store layer (U2)", () => {
 
     // A daemon rewrite must preserve the unknown field.
     store.writeObjects(
-      [{ type: "task", obj: { ...back, status: "done" } as unknown as Record<string, unknown> }],
+      [{ type: "task", obj: { ...back, state: { kind: "done" } } as unknown as Record<string, unknown> }],
       [{ id: newId("event"), task: t.id, actor: "act_matt", kind: "status-changed", at: store.nowIso() }],
     );
     const after = readFileSync(path, "utf8");
     expect(after).toContain("futureField: keep-me");
-    expect(store.getTask(t.id)!.status).toBe("done");
+    expect(store.getTask(t.id)!.state.kind).toBe("done");
   });
 
   it("reindex rebuilds the index from files and is idempotent", () => {
     const a = makeTask(store, { title: "a" });
-    makeTask(store, { title: "b", status: "done" });
+    makeTask(store, { title: "b", state: { kind: "done" } });
 
     const r1 = reindex(store);
     expect(r1.counts.task).toBe(2);
@@ -75,7 +75,7 @@ describe("store layer (U2)", () => {
     const obj: Task = {
       id: orphanId,
       title: "ghost",
-      status: "open",
+      state: { kind: "open" },
       delegatedBy: { actor: "act_matt", role: "creator" },
       createdAt: store.nowIso(),
       updatedAt: store.nowIso(),
@@ -102,8 +102,7 @@ describe("store layer (U2)", () => {
     const s2 = new Store({ root, clock });
     makeTask(s2, {
       title: "dinner with Alex",
-      status: "waiting",
-      waitingOn: { onActor: "act_alex", since: "2026-06-09", cadence: "P3D", lastNudge: null },
+      state: { kind: "waiting", onActor: "act_alex", since: "2026-06-09", cadence: "P3D", lastNudge: null },
     });
     expect(s2.allTimers()).toHaveLength(1);
     s2.close();
@@ -121,15 +120,16 @@ describe("store layer (U2)", () => {
     const timers = s3.allTimers();
     expect(timers).toHaveLength(1); // rebuilt from the waiting task's frontmatter
     expect(s3.listTasks()).toHaveLength(1);
-    // the renamed `waitingOn` key survives the write → reindex → read round-trip
-    expect(s3.listTasks()[0].waitingOn?.onActor).toBe("act_alex");
+    // the waiting payload survives the write → reindex → read round-trip (now in the union)
+    const st = s3.listTasks()[0]!.state;
+    expect(st.kind === "waiting" ? st.onActor : null).toBe("act_alex");
     s3.close();
   });
 
   it("an intent event without a completed file rename produces no state change", () => {
     // Simulate a crash after event-append, before file rename: the task keeps its
     // prior state, and reindex-from-files is the recovery. No duplicate timers/rows.
-    const t = makeTask(store, { title: "original", status: "open" });
+    const t = makeTask(store, { title: "original", state: { kind: "open" } });
     store.events.append({
       id: newId("event"),
       task: t.id,
@@ -140,7 +140,7 @@ describe("store layer (U2)", () => {
     });
     reindex(store);
     reindex(store);
-    expect(store.getTask(t.id)!.status).toBe("open"); // file never changed
+    expect(store.getTask(t.id)!.state.kind).toBe("open"); // file never changed
     expect(store.listTasks()).toHaveLength(1);
     expect(store.allTimers()).toHaveLength(0);
   });
@@ -168,7 +168,7 @@ describe("store layer (U2)", () => {
     // Daemon now performs a status mutation. It must read FRESH and revalidate.
     const fresh = store.loadTask(t.id)!;
     expect(store.externalEditDetected("task", t.id, fresh.hash)).toBe(true);
-    fresh.obj.status = "done";
+    fresh.obj.state = { kind: "done" };
     fresh.obj.updatedAt = store.nowIso();
     const events: HipEvent[] = [
       { id: newId("event"), task: t.id, actor: "act_system", kind: "external-edit", at: store.nowIso() },
@@ -180,7 +180,7 @@ describe("store layer (U2)", () => {
     );
 
     const after = store.getTask(t.id)!;
-    expect(after.status).toBe("done"); // daemon mutation applied
+    expect(after.state.kind).toBe("done"); // daemon mutation applied
     expect(after.description).toBe("human edited the notes"); // human edit survived
     expect(store.events.forTask(t.id).some((e) => e.kind === "external-edit")).toBe(true);
   });
@@ -205,5 +205,68 @@ describe("store layer (U2)", () => {
     expect(typeof log.append).toBe("function");
     expect(log.update).toBeUndefined();
     expect(log.delete).toBeUndefined();
+  });
+});
+
+describe("task-state codec (U2) — flat ↔ union", () => {
+  const base = {
+    id: "tsk_codec",
+    title: "codec task",
+    delegatedBy: { actor: "act_matt", role: "creator" as const },
+    createdAt: "2026-06-13T00:00:00Z",
+    updatedAt: "2026-06-13T00:00:00Z",
+  };
+  const kinds: TaskState[] = [
+    { kind: "open" },
+    { kind: "done" },
+    { kind: "dropped" },
+    { kind: "waiting", onActor: "act_alex", since: "2026-06-09", cadence: "P3D", lastNudge: null },
+  ];
+
+  it("serializes a waiting union task to flat status + waitingOn, no state key", () => {
+    const task: Task = { ...base, state: kinds[3]! };
+    const yaml = serialize("task", task as unknown as Record<string, unknown>);
+    expect(yaml).toContain("status: waiting");
+    expect(yaml).toContain("onActor: act_alex");
+    expect(yaml).not.toContain("state:");
+    expect(yaml).not.toContain("kind:");
+  });
+
+  it("deserializes a flat YAML task into the internal union (no top-level status/waitingOn)", () => {
+    const flatYaml = serialize("task", { ...base, state: kinds[3]! } as unknown as Record<string, unknown>);
+    const back = deserialize<Task>("task", flatYaml);
+    expect(back.state.kind).toBe("waiting");
+    expect(back.state.kind === "waiting" ? back.state.onActor : null).toBe("act_alex");
+    expect((back as unknown as Record<string, unknown>).status).toBeUndefined();
+    expect((back as unknown as Record<string, unknown>).waitingOn).toBeUndefined();
+  });
+
+  it("lift(lower(task)) deep-equals the original union for each kind", () => {
+    for (const state of kinds) {
+      const task: Task = { ...base, state };
+      expect(liftTaskState(lowerTaskState(task))).toEqual(task);
+    }
+  });
+
+  it("preserves _meta and unknown frontmatter through lift→lower→lift", () => {
+    const task = {
+      ...base,
+      state: kinds[0]!,
+      _meta: { source: "hermes" },
+      futureField: "keep-me",
+    } as unknown as Task;
+    const round = liftTaskState(lowerTaskState(liftTaskState(lowerTaskState(task))));
+    expect(round._meta).toEqual({ source: "hermes" });
+    expect((round as unknown as Record<string, unknown>).futureField).toBe("keep-me");
+  });
+
+  it("defensive lift: illegal { status: open, waitingOn: {…} } resolves to open (payload dropped)", () => {
+    const lifted = liftTaskState({ ...base, status: "open", waitingOn: { onActor: "act_x", since: "2026-06-01" } } as unknown as Record<string, unknown>);
+    expect(lifted.state).toEqual({ kind: "open" });
+  });
+
+  it("defensive lift: { status: waiting } with missing payload degrades to open", () => {
+    const lifted = liftTaskState({ ...base, status: "waiting" } as unknown as Record<string, unknown>);
+    expect(lifted.state).toEqual({ kind: "open" });
   });
 });

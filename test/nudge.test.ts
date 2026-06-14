@@ -151,7 +151,7 @@ describe("nudge engine (U5)", () => {
     clock.set(base + 3 * DAY + 1000);
 
     // External $EDITOR marks it done; the index/timer still think it's waiting.
-    const done = { ...store.getTask(t.id)!, status: "done" as const, waitingOn: null };
+    const done = { ...store.getTask(t.id)!, state: { kind: "done" as const } };
     writeFileSync(filePath(store.paths, "task", t.id), serialize("task", done as never));
 
     const r = engine.tick();

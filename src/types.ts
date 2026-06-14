@@ -77,11 +77,26 @@ export interface ThreadEntry {
   envelopeId?: string; // set when appended by reconcile — file-layer idempotency key
 }
 
+/**
+ * Internal canonical task state — one discriminated value replacing the
+ * `status` + `waitingOn` pair. A waiting payload cannot exist without waiting
+ * state (illegal states unrepresentable). `kind` equals the flat `TaskStatus`
+ * used on every external surface (disk, wire, SQLite). The codec in
+ * `store/task-state.ts` lifts flat→union (disk read) and lowers union→flat
+ * (disk write, MCP wire); the SQLite index derives its flat columns from the
+ * discriminant directly — see WireTask.
+ */
+export type TaskState =
+  | ({ kind: "waiting" } & Waiting)
+  | { kind: "open" }
+  | { kind: "done" }
+  | { kind: "dropped" };
+
 export interface Task {
   id: string;
   title: string;
   description?: string; // body field
-  status: TaskStatus;
+  state: TaskState; // internal union; flat status/waitingOn on every boundary
   priority?: Priority;
   nextActionOn?: string; // Actor ref
   watcher?: string; // Actor ref
@@ -90,13 +105,23 @@ export interface Task {
   delegatedBy: DelegatedBy; // REQUIRED provenance
   references?: Reference[];
   thread?: ThreadEntry[];
-  waitingOn?: Waiting | null; // present iff status == "waiting"
   createdAt: Iso;
   updatedAt: Iso;
   workspaceId?: string;
   origin?: { system: string; importedAt: Iso };
   _meta?: Record<string, unknown>;
 }
+
+/**
+ * Flat task DTO at every boundary that leaves TypeScript — MCP wire returns,
+ * CLI wire consumption, and the on-disk YAML projection. Derived from Task so
+ * shared field changes auto-track; only `state` is swapped for the flat
+ * `status` + `waitingOn` pair (present iff status == "waiting").
+ */
+export type WireTask = Omit<Task, "state"> & {
+  status: TaskStatus;
+  waitingOn?: Waiting | null;
+};
 
 // ---- Decision ------------------------------------------------------------
 

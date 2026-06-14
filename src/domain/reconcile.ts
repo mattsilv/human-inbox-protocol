@@ -3,8 +3,7 @@ import { newId, contentHash } from "../store/index.js";
 import { Domain } from "./index.js";
 import type { InboundEnvelope, ReconcileResult, Task, HipEvent } from "../types.js";
 import { validation, conflict, notFound, stateError } from "./errors.js";
-
-const TERMINAL = new Set(["done", "dropped"]);
+import { isTerminal } from "./tasks.js";
 
 /**
  * Map an inbound envelope to a task via deterministic tiers, then attach silently or
@@ -100,7 +99,7 @@ function attach(
   const fresh = store.loadTask(taskId);
   if (!fresh) throw notFound(`task ${taskId} not found`);
   const t = fresh.obj;
-  if (TERMINAL.has(t.status)) throw stateError(`cannot attach to a ${t.status} task`);
+  if (isTerminal(t)) throw stateError(`cannot attach to a ${t.state.kind} task`);
 
   const thread = (t.thread ??= []);
   // Idempotent: this envelope already landed here — no event-less rewrite.
@@ -111,10 +110,9 @@ function attach(
   thread.push({ actor: sender ?? env.from, content: env.content, at: store.nowIso(), envelopeId: env.id });
 
   // Waiting → open when the matched task was waiting on this sender (reply received).
-  const flipped = t.status === "waiting" && t.waitingOn?.onActor === sender;
+  const flipped = t.state.kind === "waiting" && t.state.onActor === sender;
   if (flipped) {
-    t.status = "open";
-    t.waitingOn = null;
+    t.state = { kind: "open" };
   }
   t.updatedAt = store.nowIso();
 
@@ -226,7 +224,7 @@ function actorFromEntityAlias(store: Store, alias: string): string | null {
 function liveTasks(store: Store, ids: string[]): string[] {
   return ids.filter((id) => {
     const t = store.getTask(id);
-    return t !== null && !TERMINAL.has(t.status);
+    return t !== null && !isTerminal(t);
   });
 }
 

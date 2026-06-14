@@ -1,5 +1,6 @@
 import type { ObjectType, Task, Decision, Entity, Actor } from "../types.js";
 import { parseDoc, serializeDoc, toDoc, fromDoc } from "./frontmatter.js";
+import { liftTaskState, lowerTaskState } from "./task-state.js";
 
 // Which structured field is routed into the markdown body for each object type.
 export const BODY_FIELD: Record<ObjectType, string | undefined> = {
@@ -10,12 +11,16 @@ export const BODY_FIELD: Record<ObjectType, string | undefined> = {
 };
 
 export function serialize(type: ObjectType, obj: Record<string, unknown>): string {
-  const doc = toDoc(obj, BODY_FIELD[type]);
+  // Disk stays flat: lower the internal task union to status/waitingOn on write.
+  const flat = type === "task" ? (lowerTaskState(obj as unknown as Task) as unknown as Record<string, unknown>) : obj;
+  const doc = toDoc(flat, BODY_FIELD[type]);
   return serializeDoc(doc.fields, doc.body);
 }
 
 export function deserialize<T = Record<string, unknown>>(type: ObjectType, raw: string): T {
-  return fromDoc<T>(parseDoc(raw), BODY_FIELD[type]);
+  const obj = fromDoc<Record<string, unknown>>(parseDoc(raw), BODY_FIELD[type]);
+  // Lift flat task files into the internal union; other types pass through.
+  return (type === "task" ? liftTaskState(obj) : obj) as T;
 }
 
 // Narrow typed helpers — pure (de)serialization, no I/O.

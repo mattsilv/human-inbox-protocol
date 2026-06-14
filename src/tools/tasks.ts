@@ -3,6 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolDeps } from "./deps.js";
 import { ok, fail, guard } from "./result.js";
 import { zDelegatedBy, zReference, zWaiting, zPriority } from "./schemas.js";
+// The union never crosses the wire: `wire` lowers every task to its flat DTO on return.
+import { lowerTaskState as wire } from "../store/index.js";
 import type { Reference } from "../types.js";
 
 export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void {
@@ -42,7 +44,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
           },
           a.actorId,
         );
-        return ok(task, `created ${task.id} — ${task.title}`);
+        return ok(wire(task), `created ${task.id} — ${task.title}`);
       }),
   );
 
@@ -56,7 +58,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
     async (a) =>
       guard(() => {
         const view = domain.orient(a.id);
-        return view ? ok(view) : fail("not_found", a.id);
+        return view ? ok({ ...view, task: wire(view.task) }) : fail("not_found", a.id);
       }),
   );
 
@@ -71,7 +73,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
         patch: z.record(z.string(), z.unknown()).describe("Content fields to merge"),
       },
     },
-    async (a) => guard(() => ok(domain.updateTask(a.id, a.patch, a.actorId))),
+    async (a) => guard(() => ok(wire(domain.updateTask(a.id, a.patch, a.actorId)))),
   );
 
   server.registerTool(
@@ -81,7 +83,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       description: "All tasks, optionally filtered by status.",
       inputSchema: { status: z.enum(["open", "waiting", "done", "dropped"]).optional() },
     },
-    async (a) => guard(() => ok({ tasks: domain.listTasks(a.status ? { status: a.status } : undefined) })),
+    async (a) => guard(() => ok({ tasks: domain.listTasks(a.status ? { status: a.status } : undefined).map(wire) })),
   );
 
   server.registerTool(
@@ -91,7 +93,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       description: "Set waitingOn (status→waiting) or clear it (status→open).",
       inputSchema: { actorId: z.string(), id: z.string(), waitingOn: zWaiting.nullable() },
     },
-    async (a) => guard(() => ok(domain.setWaiting(a.id, a.waitingOn, a.actorId))),
+    async (a) => guard(() => ok(wire(domain.setWaiting(a.id, a.waitingOn, a.actorId)))),
   );
 
   server.registerTool(
@@ -101,7 +103,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       description: "Transition a task to done.",
       inputSchema: { actorId: z.string(), id: z.string() },
     },
-    async (a) => guard(() => ok(domain.markDone(a.id, a.actorId))),
+    async (a) => guard(() => ok(wire(domain.markDone(a.id, a.actorId)))),
   );
 
   server.registerTool(
@@ -111,7 +113,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       description: "Transition a task to dropped.",
       inputSchema: { actorId: z.string(), id: z.string() },
     },
-    async (a) => guard(() => ok(domain.markDropped(a.id, a.actorId))),
+    async (a) => guard(() => ok(wire(domain.markDropped(a.id, a.actorId)))),
   );
 
   server.registerTool(

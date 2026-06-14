@@ -56,7 +56,7 @@ describe("reconcile flow (U6)", () => {
     expect(r.verdict).toBe("attached");
     expect(r.task).toBe(t.id);
     const after = store.getTask(t.id)!;
-    expect(after.status).toBe("open"); // reply received
+    expect(after.state.kind).toBe("open"); // reply received
     expect(after.thread?.some((e) => e.content === "Saturday works!")).toBe(true);
   });
 
@@ -65,7 +65,7 @@ describe("reconcile flow (U6)", () => {
     const r = reconcile(store, env({ reference: undefined }), SYS);
     expect(r.verdict).toBe("attached");
     expect(r.task).toBe(t.id);
-    expect(store.getTask(t.id)!.status).toBe("open");
+    expect(store.getTask(t.id)!.state.kind).toBe("open");
   });
 
   it("AE2: the same envelope twice is one reconcile, returning the original result", () => {

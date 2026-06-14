@@ -30,18 +30,18 @@ describe("domain layer (U3)", () => {
 
   it("runs a full lifecycle open→waiting→open→done with an event per transition", () => {
     const t = d.createTask({ title: "Dinner with Alex", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
-    expect(t.status).toBe("open");
+    expect(t.state.kind).toBe("open");
 
     d.setWaiting(t.id, { onActor: "act_alex", since: "2026-06-09", cadence: "P3D" }, MATT);
-    expect(store.getTask(t.id)!.status).toBe("waiting");
-    expect(store.getTask(t.id)!.waitingOn?.onActor).toBe("act_alex");
+    const waiting = store.getTask(t.id)!.state;
+    expect(waiting.kind).toBe("waiting");
+    expect(waiting.kind === "waiting" ? waiting.onActor : null).toBe("act_alex");
 
     d.setWaiting(t.id, null, MATT);
-    expect(store.getTask(t.id)!.status).toBe("open");
-    expect(store.getTask(t.id)!.waitingOn).toBeNull();
+    expect(store.getTask(t.id)!.state.kind).toBe("open");
 
     d.markDone(t.id, MATT);
-    expect(store.getTask(t.id)!.status).toBe("done");
+    expect(store.getTask(t.id)!.state.kind).toBe("done");
 
     expect(taskEventKinds(t.id)).toEqual([
       "created",
@@ -114,7 +114,7 @@ describe("domain layer (U3)", () => {
     const blocked = d.getExecution(exe.id)!;
     expect(blocked.status).toBe("input-required");
     expect(blocked.blockedOn).toBe(decision.id);
-    expect(store.getTask(t.id)!.status).toBe("open"); // two-state-machines: task untouched
+    expect(store.getTask(t.id)!.state.kind).toBe("open"); // two-state-machines: task untouched
 
     d.resolveDecision(decision.id, { kind: "freeText", freeText: "June 20-24" }, MATT);
     const resumed = d.getExecution(exe.id)!;

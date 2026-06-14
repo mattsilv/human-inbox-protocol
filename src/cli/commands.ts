@@ -1,5 +1,5 @@
 import type { HipClient } from "../client.js";
-import type { Decision, Task, HipEvent, Execution } from "../types.js";
+import type { Decision, WireTask, HipEvent, Execution } from "../types.js";
 import { colorStatus, colorId, colorHeading } from "./tty.js";
 
 // CLI command bodies. Each is an MCP client call (the CLI dogfoods the binding — no
@@ -65,7 +65,7 @@ export async function reopen(client: HipClient, actorId: string, decisionId: str
 }
 
 export async function listTasks(client: HipClient, status?: string): Promise<string> {
-  const { tasks } = (await client.callOk("task_list", status ? { status } : {})) as { tasks: Task[] };
+  const { tasks } = (await client.callOk("task_list", status ? { status } : {})) as { tasks: WireTask[] };
   if (tasks.length === 0) return "No tasks.";
   return tasks.map(renderTaskLine).join("\n");
 }
@@ -74,7 +74,7 @@ export async function show(client: HipClient, id: string): Promise<string> {
   const res = await client.call("task_read", { id });
   if (res.isError) return `Task ${id} not found.`;
   const view = (res.structuredContent ?? {}) as {
-    task?: Task;
+    task?: WireTask;
     executions?: Execution[];
     events?: HipEvent[];
   };
@@ -105,7 +105,7 @@ function renderDecision(d: Decision, n: number, total: number): string {
   return lines.join("\n");
 }
 
-function renderTaskLine(t: Task): string {
+function renderTaskLine(t: WireTask): string {
   const flag =
     t.status === "waiting"
       ? `${colorStatus("waiting")} on ${t.waitingOn?.onActor ?? "?"}`
@@ -113,7 +113,7 @@ function renderTaskLine(t: Task): string {
   return `${colorId(t.id)}  [${flag}]  ${t.title}`;
 }
 
-function renderTaskView(t: Task, executions: Execution[], evs: HipEvent[]): string {
+function renderTaskView(t: WireTask, executions: Execution[], evs: HipEvent[]): string {
   const lines = [
     `${colorHeading(t.title)}  [${colorStatus(t.status)}]`,
     `id: ${colorId(t.id)}   from: ${t.delegatedBy?.actor} (${t.delegatedBy?.role})`,
