@@ -13,4 +13,4 @@ coverage/
 /SOURCE_LOCATION.md
 /HIP_PROTOCOL_REVIEW_*.md
 docs/brainstorms/
-docs/plans/
+# docs/plans/ is published — always PII-scan before committing plan docs
