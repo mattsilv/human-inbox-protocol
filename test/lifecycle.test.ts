@@ -1,25 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { statSync, existsSync, readFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { statSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const p = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(p));
-    });
-  });
-}
 import { buildPlist } from "../src/daemon/launchd.js";
 import { acquireDataDirLock, LockError } from "../src/daemon/lock.js";
 import { install, status, serve, runReindex } from "../src/cli/lifecycle.js";
-import { configPath, tokenPath } from "../src/cli/config.js";
+import { configPath, tokenPath, loadConfig } from "../src/cli/config.js";
 import { Store } from "../src/store/index.js";
-import { tmpRoot, cleanup } from "./helpers.js";
+import { tmpRoot, cleanup, freePort } from "./helpers.js";
 
 describe("daemon lifecycle (U8)", () => {
   let dataDir: string;
@@ -78,6 +65,21 @@ describe("daemon lifecycle (U8)", () => {
     expect(store.getActor("act_owner")).not.toBeNull();
     expect(store.getActor("act_cli")).not.toBeNull();
     store.close();
+  });
+
+  it("writes the token file with no trailing newline (U1 clean byte contract)", () => {
+    install({ writePlist: false });
+    const raw = readFileSync(tokenPath(), "utf8");
+    expect(raw.endsWith("\n")).toBe(false);
+    expect(raw).toBe(raw.trim());
+    expect(raw.length).toBeGreaterThan(20);
+  });
+
+  it("loadConfig still reads a legacy newline-terminated token file (U1 backward compat)", () => {
+    install({ writePlist: false });
+    const tok = readFileSync(tokenPath(), "utf8");
+    writeFileSync(tokenPath(), tok + "\n", { mode: 0o600 }); // simulate a pre-fix install
+    expect(loadConfig().token).toBe(tok);
   });
 
   it("install is idempotent (re-running replaces without duplicating actors)", () => {

@@ -5,6 +5,7 @@ import { Store } from "../store/index.js";
 import { Domain } from "../domain/index.js";
 import { buildMcpServer, type ToolDeps } from "../tools/index.js";
 import { checkBearer } from "./auth.js";
+import { hostPort } from "./host.js";
 
 export interface DaemonOptions {
   store: Store;
@@ -157,14 +158,4 @@ function readJson(req: IncomingMessage): Promise<unknown> {
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
-}
-
-/**
- * `host:port`, bracketing a bare IPv6 literal (e.g. `fd7a:…` → `[fd7a:…]`) so it matches
- * the `[v6]:port` form a client sends in the Host header and forms a valid URL authority.
- * Already-bracketed (`[::1]`) and IPv4/hostnames pass through unchanged.
- */
-function hostPort(host: string, port: number): string {
-  const h = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-  return `${h}:${port}`;
 }

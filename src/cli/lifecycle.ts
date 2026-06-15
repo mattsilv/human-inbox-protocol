@@ -1,17 +1,18 @@
 import type { Command } from "commander";
-import { existsSync, writeFileSync, mkdirSync, chmodSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, statSync, unlinkSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { Store, defaultDataRoot, dataPaths, reindex, doctor } from "../store/index.js";
+import { Store, defaultDataRoot, dataPaths, reindex, doctor, atomicWrite, type DoctorIssue, type DoctorReport } from "../store/index.js";
 import { HipDaemon, DEFAULT_HOST, DEFAULT_PORT } from "../daemon/server.js";
+import { hostPort, canonicalHost, isAllInterfaces, isLoopbackHost } from "../daemon/host.js";
 import { NudgeEngine } from "../daemon/nudge.js";
 import { generateToken } from "../daemon/auth.js";
 import { acquireDataDirLock } from "../daemon/lock.js";
-import { buildPlist, plistPath } from "../daemon/launchd.js";
+import { buildPlist, plistPath, LAUNCHD_LABEL } from "../daemon/launchd.js";
 import { registerAdminTools } from "../tools/admin.js";
 import { ensureActor } from "../domain/actors.js";
-import { loadConfig, writeConfig, configDir, tokenPath, ConfigError } from "./config.js";
+import { loadConfig, writeConfig, configDir, configPath, tokenPath, ConfigError } from "./config.js";
 import { HipClient } from "../client.js";
 import { spin, colorHeading } from "./tty.js";
 
@@ -24,8 +25,8 @@ function host(): string {
 function port(): number {
   return process.env.HIP_PORT ? Number.parseInt(process.env.HIP_PORT, 10) : DEFAULT_PORT;
 }
-function urlFor(): string {
-  return `http://${host()}:${port()}/mcp`;
+function urlFor(hostOverride?: string): string {
+  return `http://${hostPort(hostOverride ?? host(), port())}/mcp`;
 }
 
 // ---- serve ----------------------------------------------------------------
@@ -37,6 +38,11 @@ export interface ServeHandle {
 
 export async function serve(): Promise<ServeHandle> {
   const cfg = loadConfig(); // throws an actionable ConfigError if not installed
+
+  // Best-effort: warn (never block) if the running source is ahead of the built dist.
+  const stale = checkDistStaleness();
+  if (stale) process.stderr.write(`hip: ${stale.message}\n`);
+
   const root = cfg.dataDir ?? defaultDataRoot();
   const paths = dataPaths(root);
 
@@ -90,11 +96,17 @@ export async function serve(): Promise<ServeHandle> {
 export interface InstallOptions {
   ownerName?: string;
   writePlist?: boolean;
+  /** Bind host override; falls back to HIP_HOST/DEFAULT_HOST. Routed through `hostPort`. */
+  host?: string;
 }
 
 export function install(opts: InstallOptions = {}): string {
   const root = defaultDataRoot();
   ensureDirMode(root, 0o700); // attention data is private
+
+  // Resolve + canonicalize the bind host once and use it for both the config url and the
+  // plist env, so the two writable sources and the daemon's allowlist agree byte-for-byte.
+  const bindHost = canonicalHost(opts.host ?? host());
 
   const token = generateToken();
 
@@ -107,7 +119,7 @@ export function install(opts: InstallOptions = {}): string {
     store.close();
   }
 
-  const written = writeConfig({ url: urlFor(), token, actorId: OWNER, dataDir: root });
+  const written = writeConfig({ url: urlFor(bindHost), token, actorId: OWNER, dataDir: root });
 
   const lines = [
     "HIP installed.",
@@ -115,7 +127,7 @@ export function install(opts: InstallOptions = {}): string {
     `  config:     ${written.configPath}`,
     `  token file: ${written.tokenPath} (0600)  — the token is NOT printed; read it from this file`,
     `  owner actor: ${OWNER}     cli actor: ${CLI_ACTOR}`,
-    `  url:        ${urlFor()}`,
+    `  url:        ${urlFor(bindHost)}`,
   ];
 
   if (opts.writePlist !== false) {
@@ -126,7 +138,7 @@ export function install(opts: InstallOptions = {}): string {
       scriptPath: process.argv[1] ?? "hip",
       dataDir: root,
       configDir: configDir(),
-      host: host(),
+      host: bindHost,
       port: port(),
       logDir: root,
     });
@@ -137,7 +149,7 @@ export function install(opts: InstallOptions = {}): string {
 
   lines.push("");
   lines.push("Connect a client (Hermes / Claude Code):");
-  lines.push(`  url=${urlFor()}  bearer=$(cat ${tokenPath()})  actorId=${OWNER}`);
+  lines.push(`  url=${urlFor(bindHost)}  bearer=$(cat ${tokenPath()})  actorId=${OWNER}`);
   return lines.join("\n");
 }
 
@@ -176,13 +188,87 @@ export async function status(): Promise<string> {
 }
 
 export async function runDoctor(): Promise<string> {
+  // Bind-reality checks are CLI-side (they need config/plist/fs, which the daemon-side
+  // store doctor does not have) and are merged into both the online and offline reports.
+  const bind = bindRealityChecks();
   return viaDaemonOrDirect(
     async (client) => {
-      const r = (await client.callOk("doctor_run")) as { ok: boolean; issues: { message: string }[] };
-      return formatDoctor(r);
+      const r = (await client.callOk("doctor_run")) as unknown as DoctorReport;
+      return formatDoctor(withBindChecks(r, bind));
     },
-    (store) => formatDoctor(doctor(store)) + "\n" + permsReport(),
+    (store) => formatDoctor(withBindChecks(doctor(store), bind)) + "\n" + permsReport(),
   );
+}
+
+/** Merge bind-reality issues into a store-doctor report, recomputing `ok` (errors flip it; warnings do not). */
+function withBindChecks(r: DoctorReport, bind: DoctorIssue[]): DoctorReport {
+  const issues = [...r.issues, ...bind];
+  return { ok: issues.every((i) => i.severity !== "error"), issues };
+}
+
+/** The host implied by the config url, or null if unparseable. */
+function hostFromUrl(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/** The HIP_HOST declared in the LaunchAgent plist, or null if no plist / no key. */
+function readPlistHost(): string | null {
+  const target = plistPath();
+  if (!existsSync(target)) return null;
+  const m = /<key>HIP_HOST<\/key>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
+  return m ? m[1]! : null;
+}
+
+/**
+ * CLI-side network/bind reality checks (KTD1): plist↔config host mismatch, an unsafe
+ * all-interfaces bind (error), a non-loopback bind reminder (warn), and dist staleness.
+ * Returns no issues when not installed.
+ */
+export function bindRealityChecks(): DoctorIssue[] {
+  const issues: DoctorIssue[] = [];
+  let cfg;
+  try {
+    cfg = loadConfig();
+  } catch {
+    return issues; // not installed — nothing to check
+  }
+
+  const cfgHost = hostFromUrl(cfg.url);
+  const plistHost = readPlistHost();
+
+  if (plistHost !== null && cfgHost !== null && canonicalHost(plistHost) !== canonicalHost(cfgHost)) {
+    issues.push({
+      severity: "error",
+      code: "host-mismatch",
+      message: `plist HIP_HOST (${plistHost}) != config url host (${cfgHost}) — run \`hip rebind\` to resync`,
+    });
+  }
+
+  const bindHost = cfgHost ?? plistHost;
+  if (bindHost) {
+    if (isAllInterfaces(bindHost)) {
+      issues.push({
+        severity: "error",
+        code: "bind-all-interfaces",
+        message: `daemon is bound to ${bindHost} (all interfaces) — never safe; \`hip rebind\` to a specific host`,
+      });
+    } else if (!isLoopbackHost(bindHost)) {
+      issues.push({
+        severity: "warn",
+        code: "non-loopback-bind",
+        message: `bound to ${bindHost} (non-loopback) — the bearer token is the only gate. HIP cannot verify network ACLs are in place; restrict the port at the network layer and keep the token 0600`,
+      });
+    }
+  }
+
+  const stale = checkDistStaleness();
+  if (stale) issues.push(stale);
+
+  return issues;
 }
 
 export async function runReindex(): Promise<string> {
@@ -225,9 +311,9 @@ async function viaDaemonOrDirect(
   }
 }
 
-function formatDoctor(r: { ok: boolean; issues: { message: string }[] }): string {
+function formatDoctor(r: DoctorReport): string {
   if (r.ok && r.issues.length === 0) return "doctor: clean.";
-  return ["doctor:", ...r.issues.map((i) => `  - ${i.message}`)].join("\n");
+  return ["doctor:", ...r.issues.map((i) => `  - [${i.severity}] ${i.message}`)].join("\n");
 }
 
 /** Warn on loose permissions for the data dir and token file. */
@@ -261,6 +347,48 @@ function repoRoot(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
 
+/** Newest mtime (ms) of any file ending in `ext` under `dir`, recursively. 0 if none. */
+function newestMtime(dir: string, ext: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) newest = Math.max(newest, newestMtime(p, ext));
+    else if (entry.name.endsWith(ext)) newest = Math.max(newest, statSync(p).mtimeMs);
+  }
+  return newest;
+}
+
+/**
+ * Best-effort staleness hint (a `warn`, never an `error`): is the built dist older than
+ * the source? Catches a `git pull` without `hip update`. mtime is a weak proxy — an
+ * editor save / `touch` trips a false positive, a `cp -p` / restore a false negative —
+ * so the wording is hedged and this never gates startup. A recorded `dist/BUILD_SHA`
+ * would be the reliable mechanism (deferred). Returns null when `src/` is absent (npm
+ * package ships only dist) or `dist/cli/index.js` is absent (dev tree mid-build), so
+ * there are no false positives in either runtime. `root` is injectable for tests.
+ */
+export function checkDistStaleness(root: string = repoRoot()): DoctorIssue | null {
+  try {
+    const srcDir = join(root, "src");
+    const distMarker = join(root, "dist", "cli", "index.js");
+    if (!existsSync(srcDir) || !existsSync(distMarker)) return null;
+    const newestSrc = newestMtime(srcDir, ".ts");
+    const distMtime = statSync(distMarker).mtimeMs;
+    if (newestSrc > distMtime) {
+      return {
+        severity: "warn",
+        code: "dist-stale",
+        message: "dist may be stale (src is newer than dist/cli/index.js) — run `hip update` to rebuild",
+      };
+    }
+    return null;
+  } catch {
+    // A transient fs fault (permission, TOCTOU during the walk) must degrade to "no hint",
+    // never abort serve() startup — this is a best-effort signal, not a gate.
+    return null;
+  }
+}
+
 /** Pull latest, rebuild dist/, and restart the daemon via scripts/update.sh. */
 export function update(opts: { pull?: boolean } = {}): number {
   const script = join(repoRoot(), "scripts", "update.sh");
@@ -273,6 +401,192 @@ export function update(opts: { pull?: boolean } = {}): number {
   const args = opts.pull === false ? [script, "--no-pull"] : [script];
   const r = spawnSync("bash", args, { stdio: "inherit" });
   return r.status ?? 1;
+}
+
+// ---- rebind ---------------------------------------------------------------
+
+const NONLOOPBACK_REMINDER =
+  "\n  security: bound beyond loopback — the bearer token is now the only gate. " +
+  "HIP cannot verify network ACLs are in place; restrict the port at the network layer " +
+  "(e.g. Tailscale ACLs) and keep the token 0600.";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Is the LaunchAgent loaded? Only meaningful on macOS; false elsewhere. */
+function underLaunchd(): boolean {
+  if (process.platform !== "darwin") return false;
+  // timeout so a wedged launchd can't hang the event loop indefinitely.
+  const r = spawnSync("launchctl", ["list"], { encoding: "utf8", timeout: 5000 });
+  return r.status === 0 && (r.stdout ?? "").includes(LAUNCHD_LABEL);
+}
+
+/**
+ * Restart the LaunchAgent so it re-reads the plist env (and re-derives the allowlist).
+ * Returns false if no launchd daemon is loaded; throws if a daemon IS loaded but every
+ * restart path fails — so rebind reports a reload failure rather than misattributing it
+ * to a bind/allowlist failure. All spawns carry a timeout so a stuck launchd/mach port
+ * cannot hang the process.
+ */
+function launchctlReload(): boolean {
+  if (!underLaunchd()) return false;
+  const uid = process.getuid?.() ?? 0;
+  const kick = spawnSync("launchctl", ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`], { timeout: 10000 });
+  if (kick.status === 0) return true;
+  // Fallback: unload (ignore "not loaded") then load — mirrors scripts/update.sh.
+  const target = plistPath();
+  spawnSync("launchctl", ["unload", target], { timeout: 10000 });
+  const load = spawnSync("launchctl", ["load", target], { timeout: 10000 });
+  if (load.status !== 0) {
+    throw new Error(`launchctl reload failed — kickstart and unload/load both failed for ${LAUNCHD_LABEL}`);
+  }
+  return true;
+}
+
+export type VerifyResult = "ok" | "forbidden" | "unreachable";
+
+/**
+ * Verify the daemon admits a *remote* request on the new authority. This MUST be an
+ * authenticated POST: the daemon refuses non-POST with 405 and a missing Bearer with
+ * 401 *before* the DNS-rebinding Host/Origin check ever runs, so only an authenticated
+ * POST can produce the 403 that signals a stale allowlist. A 403 → the allowlist did not
+ * pick up the rebind; any other response → admitted. Connection errors are retried until
+ * the budget expires (the daemon may still be restarting), then reported unreachable.
+ */
+export async function remoteVerify(
+  url: string,
+  token: string,
+  budgetMs = 5000,
+  intervalMs = 250,
+): Promise<VerifyResult> {
+  const deadline = Date.now() + budgetMs;
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+  for (;;) {
+    let status: number | null = null;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body,
+        // Per-attempt timeout: a half-open socket (common mid-restart) must not block the
+        // loop past the budget waiting on the OS TCP timeout. Abort → caught → retry.
+        signal: AbortSignal.timeout(Math.min(intervalMs * 4, 2000)),
+      });
+      status = res.status;
+    } catch {
+      status = null; // connection error or per-attempt timeout — daemon may still be restarting
+    }
+    // 403 = stale allowlist, fail fast (a restart won't change it without our reload).
+    // Only a clean 2xx counts as admitted; a 401/405/5xx from a half-initialized daemon
+    // must NOT read as success, so retry it like a connection error until the budget ends.
+    if (status === 403) return "forbidden";
+    if (status !== null && status >= 200 && status < 300) return "ok";
+    if (Date.now() >= deadline) return "unreachable";
+    await sleep(intervalMs);
+  }
+}
+
+export interface RebindDeps {
+  /** Reload the daemon; returns false when no launchd daemon is loaded. Injectable for tests. */
+  reload?: () => boolean;
+  /** Verify the remote path on the new url. Injectable for tests. */
+  verify?: (url: string, token: string) => Promise<VerifyResult>;
+}
+
+/**
+ * Transactionally rebind the daemon to `newHost`: reject all-interfaces, snapshot config
+ * + plist, rewrite both to the new authority, reload launchd, then verify the remote
+ * path. On any failure after the writes, roll back to the previous host. "Transactional
+ * with rollback", not a single atomic syscall — three writes plus a restart cannot be.
+ */
+export async function rebind(rawHost: string, deps: RebindDeps = {}): Promise<string> {
+  if (!rawHost || !rawHost.trim()) {
+    throw new Error(
+      "rebind requires a host — an empty host binds all interfaces. Pass a specific host (loopback or a tailnet address).",
+    );
+  }
+  if (isAllInterfaces(rawHost)) {
+    throw new Error(
+      `refusing to bind ${rawHost} (all interfaces) — the bearer token would be the only gate on every network interface. Bind a specific host (loopback or a tailnet address) instead.`,
+    );
+  }
+  // Canonicalize so the plist HIP_HOST and the config url use one byte form.
+  const newHost = canonicalHost(rawHost);
+
+  const cfg = loadConfig(); // actionable ConfigError if not installed
+  const root = cfg.dataDir ?? defaultDataRoot();
+  const newUrl = urlFor(newHost);
+  const target = plistPath();
+
+  // Snapshot for rollback.
+  const cfgSnapshot = readFileSync(configPath(), "utf8");
+  const plistSnapshot = existsSync(target) ? readFileSync(target, "utf8") : null;
+
+  const restore = () => {
+    writeFileSync(configPath(), cfgSnapshot, { mode: 0o600 });
+    if (plistSnapshot !== null) atomicWrite(target, plistSnapshot);
+  };
+
+  // Rewrite config url (re-pass token/actorId/dataDir — there is no partial update) and,
+  // if a plist exists, regenerate it with the new HIP_HOST.
+  writeConfig({ url: newUrl, token: cfg.token, actorId: cfg.actorId, dataDir: cfg.dataDir });
+  if (plistSnapshot !== null) {
+    atomicWrite(
+      target,
+      buildPlist({
+        nodePath: process.execPath,
+        scriptPath: process.argv[1] ?? "hip",
+        dataDir: root,
+        configDir: configDir(),
+        host: newHost,
+        port: port(),
+        logDir: root,
+      }),
+    );
+  }
+
+  const reload = deps.reload ?? launchctlReload;
+  const verify = deps.verify ?? remoteVerify;
+
+  const rollback = (reason: string): never => {
+    restore();
+    try {
+      reload(); // best-effort: get the daemon back onto the restored host
+    } catch {
+      /* the restored files are what matter; a failed rollback reload needs a manual restart */
+    }
+    throw new Error(`rebind to ${newHost} failed: ${reason}. Rolled back to the previous host.`);
+  };
+
+  let result: VerifyResult;
+  try {
+    const reloaded = reload();
+    if (!reloaded) {
+      // No launchd daemon (manual `hip serve`, or non-macOS): files are written; the
+      // operator must restart the daemon themselves. Nothing to verify yet.
+      return `Rebound to ${newUrl}. No launchd daemon detected — restart your \`hip serve\` to pick up the new host (config + plist already written).`;
+    }
+    result = await verify(newUrl, cfg.token);
+  } catch (e) {
+    // reload or verify threw (e.g. a hard launchctl reload failure) — roll back, don't
+    // leave config/plist pointing at a host the daemon never came up on.
+    return rollback(e instanceof Error ? e.message : String(e));
+  }
+
+  if (result === "ok") {
+    return `Rebound to ${newUrl} — remote path verified.${isLoopbackHost(newHost) ? "" : NONLOOPBACK_REMINDER}`;
+  }
+
+  return rollback(
+    result === "forbidden"
+      ? "the daemon rejected the new Host (its allowlist did not pick up the rebind)"
+      : "the daemon did not come back on the new host (bind failed, or still restarting past the verify budget)",
+  );
 }
 
 // ---- command registration -------------------------------------------------
@@ -295,8 +609,33 @@ export function registerLifecycleCommands(program: Command): void {
     .command("install")
     .description("Generate the token, seed actors, and write the LaunchAgent")
     .option("--owner-name <name>", "display name for the owner actor")
-    .action((opts: { ownerName?: string }) => {
-      process.stdout.write(install(opts.ownerName ? { ownerName: opts.ownerName } : {}) + "\n");
+    .option("--host <host>", "bind host (default loopback); for a running daemon use `hip rebind` instead")
+    .action((opts: { ownerName?: string; host?: string }) => {
+      // install does not reload a running daemon, so --host on a loaded daemon would
+      // leave the plist and the live allowlist mismatched — the silent desync rebind exists to prevent.
+      if (opts.host && underLaunchd()) {
+        process.stderr.write(
+          `hip: a daemon is already loaded — use \`hip rebind ${opts.host}\` to change the bind host safely (install does not reload).\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const installOpts: InstallOptions = {};
+      if (opts.ownerName) installOpts.ownerName = opts.ownerName;
+      if (opts.host) installOpts.host = opts.host;
+      process.stdout.write(install(installOpts) + "\n");
+    });
+
+  program
+    .command("rebind <host>")
+    .description("Rebind the daemon to a new host: rewrite config + plist, reload, and verify the remote path")
+    .action(async (host: string) => {
+      try {
+        process.stdout.write((await rebind(host)) + "\n");
+      } catch (e) {
+        process.stderr.write(`hip: ${e instanceof Error ? e.message : String(e)}\n`);
+        process.exitCode = 1;
+      }
     });
 
   program
@@ -315,7 +654,7 @@ export function registerLifecycleCommands(program: Command): void {
 
   program
     .command("doctor")
-    .description("Audit store consistency")
+    .description("Audit store consistency plus network/bind reality (host mismatch, bind safety, dist staleness)")
     .action(async () => {
       process.stdout.write((await runDoctor()) + "\n");
     });

@@ -11,8 +11,15 @@ import { doctor, reindex } from "../store/index.js";
 export function registerAdminTools(server: McpServer, { store }: ToolDeps): void {
   server.registerTool(
     "doctor_run",
-    { title: "Run doctor", description: "Audit store consistency (admin).", inputSchema: {} },
-    async () => guard(() => ok(doctor(store))),
+    {
+      title: "Run doctor",
+      description:
+        "Audit store consistency (admin). Store-scoped only — network/bind-reality checks (host mismatch, bind safety, dist staleness) run CLI-side via `hip doctor`.",
+      inputSchema: {},
+    },
+    // The report carries a `scope` marker so an MCP caller knows it is partial: bind-reality
+    // checks need config/plist/fs context the daemon does not have (see lifecycle.bindRealityChecks).
+    async () => guard(() => ok({ ...doctor(store), scope: "store-only" })),
   );
 
   server.registerTool(

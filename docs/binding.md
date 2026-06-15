@@ -31,11 +31,21 @@ HIP_HOST=<this-machine-tailscale-ip>   # in the LaunchAgent plist env, then relo
 ```
 
 The agent points at `http://<this-machine-tailscale-ip>:4319/mcp` with the same
-`Authorization: Bearer <token>`. No `--host` flag is needed for v1 — the env var drives
-the bind host, and the daemon adds that host to its DNS-rebinding allowlist so the
-remote `Host` header is accepted. (Connect by the **IP** that `HIP_HOST` was set to; a
+`Authorization: Bearer <token>`. Connect by the **IP** that `HIP_HOST` was set to; a
 MagicDNS name only works if `HIP_HOST` is set to that exact name, since the `Host`
-header must match the allowlisted bind host.)
+header must match the allowlisted bind host.
+
+Use the CLI rather than hand-editing the plist — `HIP_HOST`, the `config.json` url, and
+the daemon's DNS-rebinding allowlist must all agree, and the allowlist is re-derived only
+when the daemon restarts:
+
+- **`hip rebind <host>`** — atomically rewrites the plist host and `config.json` url,
+  reloads the daemon, then verifies the *remote* path (an authenticated POST whose `Host`
+  is the new bind host). On failure it rolls back to the previous host. This is the safe
+  way to move a running daemon on or off loopback.
+- **`hip install --host <host>`** — first-time install bound to a non-loopback host. On an
+  already-running daemon it refuses and points at `hip rebind` (install does not reload).
+- Both reject `0.0.0.0`/`::` — never bind all interfaces (see Security below).
 
 > **Security:** binding beyond `127.0.0.1` removes loopback as the network gate, so the
 > **bearer token becomes the only thing standing between the tailnet and your store.**
@@ -49,6 +59,10 @@ Two distinct layers — do not conflate them:
 1. **Channel auth** — a bearer token generated at `hip install`, stored `0600` in the
    config dir, sent as `Authorization: Bearer <token>`. A missing/wrong token is
    `401`. The token authenticates *the channel*, not the actor.
+   **Token-file format contract:** the file holds **exactly** the token — no trailing
+   newline — so a consumer comparing raw bytes matches. Compare trimmed values, not raw
+   bytes. (Installs predating this contract keep a legacy trailing newline until the next
+   `hip install`/`hip rebind` rewrites the file; the daemon `.trim()`s on read regardless.)
 2. **Actor identity** — every mutating tool carries an explicit `actorId` argument;
    `task_block` and `execution_*` carry an explicit `executionId`. The daemon **never**
    derives actor or execution from the connection, session, or token. Actor claims are
@@ -120,6 +134,36 @@ session-dependent behavior, state keyed by HIP ids), the migration is mechanical
 single writer). They are **not** HIP protocol tools — they are this implementation's
 admin surface, exposed only so the CLI can reach the store while the daemon holds the
 lock. Documented here so clients don't mistake them for portable HIP verbs.
+
+## Troubleshooting: 401 vs 403 (different gates — do not conflate)
+
+These are two distinct guards. A `401` is the **token** gate; a `403` is the
+**DNS-rebinding Host/Origin** gate. They fail for unrelated reasons and have different
+fixes.
+
+- **`401 unauthorized`** — the `Authorization` header was missing, empty, or malformed.
+  The most common real cause is an **unset env var interpolating to an empty Bearer**:
+  the client sends `Authorization: Bearer ` with nothing after it, which reads like a
+  "bad token" but is actually an unpopulated variable. Confirm the token env var is
+  non-empty *before* suspecting the token value — e.g. `echo "[$HIP_TOKEN]"` should show
+  the token between the brackets, not `[]`. The token itself lives in the `0600` token
+  file (`cat` it, mind the format contract above).
+
+- **`403` (Host/Origin not allowlisted)** — the request reached the daemon with a valid
+  token but a `Host`/`Origin` the DNS-rebinding allowlist does not contain. This is a
+  bind/connect-string mismatch, **not** an auth failure: the daemon is bound to one host
+  and the client connected by another (or the daemon was not reloaded after a host
+  change, so its allowlist is stale). Fix with **`hip rebind <host>`** (which reloads and
+  re-verifies), and connect by the exact string `HIP_HOST` is set to. Once bound beyond
+  loopback the token is the only gate — see Security above.
+
+## Doctor scopes (CLI vs MCP)
+
+`hip doctor` (CLI) runs **store consistency plus network/bind-reality** checks — plist↔
+config host mismatch, unsafe bind, and dist staleness — because those need config/plist/
+filesystem context. The `doctor_run` MCP tool is **store-scoped only** (it marks its
+result `scope: store-only`); an agent calling it over MCP will not see bind-reality
+issues. Diagnose host-mismatch, bind safety, and staleness from the CLI.
 
 ## Storage model (informative)
 
