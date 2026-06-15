@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, statSync
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { Store, defaultDataRoot, dataPaths, reindex, doctor, atomicWrite, type DoctorIssue } from "../store/index.js";
+import { Store, defaultDataRoot, dataPaths, reindex, doctor, atomicWrite, type DoctorIssue, type DoctorReport } from "../store/index.js";
 import { HipDaemon, DEFAULT_HOST, DEFAULT_PORT } from "../daemon/server.js";
 import { hostPort, canonicalHost, isAllInterfaces, isLoopbackHost } from "../daemon/host.js";
 import { NudgeEngine } from "../daemon/nudge.js";
@@ -193,7 +193,7 @@ export async function runDoctor(): Promise<string> {
   const bind = bindRealityChecks();
   return viaDaemonOrDirect(
     async (client) => {
-      const r = (await client.callOk("doctor_run")) as { ok: boolean; issues: DoctorIssue[] };
+      const r = (await client.callOk("doctor_run")) as unknown as DoctorReport;
       return formatDoctor(withBindChecks(r, bind));
     },
     (store) => formatDoctor(withBindChecks(doctor(store), bind)) + "\n" + permsReport(),
@@ -201,7 +201,7 @@ export async function runDoctor(): Promise<string> {
 }
 
 /** Merge bind-reality issues into a store-doctor report, recomputing `ok` (errors flip it; warnings do not). */
-function withBindChecks(r: { ok: boolean; issues: DoctorIssue[] }, bind: DoctorIssue[]): { ok: boolean; issues: DoctorIssue[] } {
+function withBindChecks(r: DoctorReport, bind: DoctorIssue[]): DoctorReport {
   const issues = [...r.issues, ...bind];
   return { ok: issues.every((i) => i.severity !== "error"), issues };
 }
@@ -311,7 +311,7 @@ async function viaDaemonOrDirect(
   }
 }
 
-function formatDoctor(r: { ok: boolean; issues: DoctorIssue[] }): string {
+function formatDoctor(r: DoctorReport): string {
   if (r.ok && r.issues.length === 0) return "doctor: clean.";
   return ["doctor:", ...r.issues.map((i) => `  - [${i.severity}] ${i.message}`)].join("\n");
 }
@@ -368,19 +368,25 @@ function newestMtime(dir: string, ext: string): number {
  * there are no false positives in either runtime. `root` is injectable for tests.
  */
 export function checkDistStaleness(root: string = repoRoot()): DoctorIssue | null {
-  const srcDir = join(root, "src");
-  const distMarker = join(root, "dist", "cli", "index.js");
-  if (!existsSync(srcDir) || !existsSync(distMarker)) return null;
-  const newestSrc = newestMtime(srcDir, ".ts");
-  const distMtime = statSync(distMarker).mtimeMs;
-  if (newestSrc > distMtime) {
-    return {
-      severity: "warn",
-      code: "dist-stale",
-      message: "dist may be stale (src is newer than dist/cli/index.js) — run `hip update` to rebuild",
-    };
+  try {
+    const srcDir = join(root, "src");
+    const distMarker = join(root, "dist", "cli", "index.js");
+    if (!existsSync(srcDir) || !existsSync(distMarker)) return null;
+    const newestSrc = newestMtime(srcDir, ".ts");
+    const distMtime = statSync(distMarker).mtimeMs;
+    if (newestSrc > distMtime) {
+      return {
+        severity: "warn",
+        code: "dist-stale",
+        message: "dist may be stale (src is newer than dist/cli/index.js) — run `hip update` to rebuild",
+      };
+    }
+    return null;
+  } catch {
+    // A transient fs fault (permission, TOCTOU during the walk) must degrade to "no hint",
+    // never abort serve() startup — this is a best-effort signal, not a gate.
+    return null;
   }
-  return null;
 }
 
 /** Pull latest, rebuild dist/, and restart the daemon via scripts/update.sh. */
@@ -411,20 +417,29 @@ function sleep(ms: number): Promise<void> {
 /** Is the LaunchAgent loaded? Only meaningful on macOS; false elsewhere. */
 function underLaunchd(): boolean {
   if (process.platform !== "darwin") return false;
-  const r = spawnSync("launchctl", ["list"], { encoding: "utf8" });
+  // timeout so a wedged launchd can't hang the event loop indefinitely.
+  const r = spawnSync("launchctl", ["list"], { encoding: "utf8", timeout: 5000 });
   return r.status === 0 && (r.stdout ?? "").includes(LAUNCHD_LABEL);
 }
 
-/** Restart the LaunchAgent so it re-reads the plist env (and re-derives the allowlist). Returns false if no launchd daemon is loaded. */
+/**
+ * Restart the LaunchAgent so it re-reads the plist env (and re-derives the allowlist).
+ * Returns false if no launchd daemon is loaded; throws if a daemon IS loaded but every
+ * restart path fails — so rebind reports a reload failure rather than misattributing it
+ * to a bind/allowlist failure. All spawns carry a timeout so a stuck launchd/mach port
+ * cannot hang the process.
+ */
 function launchctlReload(): boolean {
   if (!underLaunchd()) return false;
   const uid = process.getuid?.() ?? 0;
-  const kick = spawnSync("launchctl", ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`]);
-  if (kick.status !== 0) {
-    // Fallback: unload (ignore "not loaded") then load — mirrors scripts/update.sh.
-    const target = plistPath();
-    spawnSync("launchctl", ["unload", target]);
-    spawnSync("launchctl", ["load", target]);
+  const kick = spawnSync("launchctl", ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`], { timeout: 10000 });
+  if (kick.status === 0) return true;
+  // Fallback: unload (ignore "not loaded") then load — mirrors scripts/update.sh.
+  const target = plistPath();
+  spawnSync("launchctl", ["unload", target], { timeout: 10000 });
+  const load = spawnSync("launchctl", ["load", target], { timeout: 10000 });
+  if (load.status !== 0) {
+    throw new Error(`launchctl reload failed — kickstart and unload/load both failed for ${LAUNCHD_LABEL}`);
   }
   return true;
 }
@@ -458,10 +473,13 @@ export async function remoteVerify(
           accept: "application/json, text/event-stream",
         },
         body,
+        // Per-attempt timeout: a half-open socket (common mid-restart) must not block the
+        // loop past the budget waiting on the OS TCP timeout. Abort → caught → retry.
+        signal: AbortSignal.timeout(Math.min(intervalMs * 4, 2000)),
       });
       status = res.status;
     } catch {
-      status = null; // connection error — daemon may still be restarting
+      status = null; // connection error or per-attempt timeout — daemon may still be restarting
     }
     // 403 = stale allowlist, fail fast (a restart won't change it without our reload).
     // Only a clean 2xx counts as admitted; a 401/405/5xx from a half-initialized daemon
@@ -487,6 +505,11 @@ export interface RebindDeps {
  * with rollback", not a single atomic syscall — three writes plus a restart cannot be.
  */
 export async function rebind(rawHost: string, deps: RebindDeps = {}): Promise<string> {
+  if (!rawHost || !rawHost.trim()) {
+    throw new Error(
+      "rebind requires a host — an empty host binds all interfaces. Pass a specific host (loopback or a tailnet address).",
+    );
+  }
   if (isAllInterfaces(rawHost)) {
     throw new Error(
       `refusing to bind ${rawHost} (all interfaces) — the bearer token would be the only gate on every network interface. Bind a specific host (loopback or a tailnet address) instead.`,
@@ -530,25 +553,40 @@ export async function rebind(rawHost: string, deps: RebindDeps = {}): Promise<st
   const reload = deps.reload ?? launchctlReload;
   const verify = deps.verify ?? remoteVerify;
 
-  const reloaded = reload();
-  if (!reloaded) {
-    // No launchd daemon (manual `hip serve`, or non-macOS): files are written; the
-    // operator must restart the daemon themselves. Nothing to verify yet.
-    return `Rebound to ${newUrl}. No launchd daemon detected — restart your \`hip serve\` to pick up the new host (config + plist already written).`;
+  const rollback = (reason: string): never => {
+    restore();
+    try {
+      reload(); // best-effort: get the daemon back onto the restored host
+    } catch {
+      /* the restored files are what matter; a failed rollback reload needs a manual restart */
+    }
+    throw new Error(`rebind to ${newHost} failed: ${reason}. Rolled back to the previous host.`);
+  };
+
+  let result: VerifyResult;
+  try {
+    const reloaded = reload();
+    if (!reloaded) {
+      // No launchd daemon (manual `hip serve`, or non-macOS): files are written; the
+      // operator must restart the daemon themselves. Nothing to verify yet.
+      return `Rebound to ${newUrl}. No launchd daemon detected — restart your \`hip serve\` to pick up the new host (config + plist already written).`;
+    }
+    result = await verify(newUrl, cfg.token);
+  } catch (e) {
+    // reload or verify threw (e.g. a hard launchctl reload failure) — roll back, don't
+    // leave config/plist pointing at a host the daemon never came up on.
+    return rollback(e instanceof Error ? e.message : String(e));
   }
 
-  const result = await verify(newUrl, cfg.token);
   if (result === "ok") {
     return `Rebound to ${newUrl} — remote path verified.${isLoopbackHost(newHost) ? "" : NONLOOPBACK_REMINDER}`;
   }
 
-  restore();
-  reload();
-  const why =
+  return rollback(
     result === "forbidden"
       ? "the daemon rejected the new Host (its allowlist did not pick up the rebind)"
-      : "the daemon did not come back on the new host (bind failed, or still restarting past the verify budget)";
-  throw new Error(`rebind to ${newHost} failed: ${why}. Rolled back to the previous host.`);
+      : "the daemon did not come back on the new host (bind failed, or still restarting past the verify budget)",
+  );
 }
 
 // ---- command registration -------------------------------------------------

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 import { Store, newId } from "../src/store/index.js";
 import type { Clock } from "../src/store/index.js";
 import type { Task, HipEvent } from "../src/types.js";
@@ -11,6 +12,19 @@ export function tmpRoot(): string {
 
 export function cleanup(root: string): void {
   rmSync(root, { recursive: true, force: true });
+}
+
+/** Bind an ephemeral port, then release it — for tests that need a real, free port. */
+export function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const s = createServer();
+    s.once("error", reject);
+    s.listen(0, "127.0.0.1", () => {
+      const addr = s.address();
+      const p = typeof addr === "object" && addr ? addr.port : 0;
+      s.close(() => resolve(p));
+    });
+  });
 }
 
 /** A test clock whose value the test advances explicitly. */

@@ -35,8 +35,13 @@ export function isLoopbackHost(host: string): boolean {
   return c === "127.0.0.1" || c === "localhost" || c === "::1";
 }
 
-/** Whether a bind host means "all interfaces" — never safe to bind (token becomes the sole gate on every NIC). */
+/**
+ * Whether a bind host means "all interfaces" — never safe to bind (the token becomes the
+ * sole gate on every NIC). Covers the empty string (Node binds `""` to all interfaces) and
+ * the common IPv4/IPv6 wildcard spellings. Full IPv6 normalization is deferred (see
+ * canonicalHost), so exotic spellings are a documented residual.
+ */
+const ALL_INTERFACES = new Set(["", "0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0", "::ffff:0.0.0.0", "::ffff:0:0"]);
 export function isAllInterfaces(host: string): boolean {
-  const c = canonicalHost(host);
-  return c === "0.0.0.0" || c === "::";
+  return ALL_INTERFACES.has(canonicalHost(host));
 }

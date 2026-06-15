@@ -1,24 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readFileSync, statSync } from "node:fs";
-import { createServer as createHttpServer } from "node:http";
-import { createServer as createNetServer } from "node:net";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { createServer as createHttpServer, type Server } from "node:http";
 import { HipDaemon } from "../src/daemon/server.js";
 import { rebind, remoteVerify, install } from "../src/cli/lifecycle.js";
 import { configPath, tokenPath } from "../src/cli/config.js";
 import { plistPath } from "../src/daemon/launchd.js";
 import { Store } from "../src/store/index.js";
-import { tmpRoot, cleanup } from "./helpers.js";
+import { tmpRoot, cleanup, freePort } from "./helpers.js";
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createNetServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const p = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(p));
-    });
-  });
+/** Start a stub HTTP server whose handler is supplied per call; returns its url + closer. */
+async function stubServer(handler: Parameters<typeof createHttpServer>[1]): Promise<{ url: string; close: () => Promise<void>; server: Server }> {
+  const srv = createHttpServer(handler);
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const addr = srv.address();
+  const port = typeof addr === "object" && addr ? addr.port : 0;
+  return { url: `http://127.0.0.1:${port}/mcp`, close: () => new Promise<void>((r) => srv.close(() => r())), server: srv };
 }
 
 describe("remoteVerify (U3) — authenticated POST against the new authority", () => {
@@ -60,6 +56,36 @@ describe("remoteVerify (U3) — authenticated POST against the new authority", (
   it("returns unreachable when nothing is listening (polls to budget)", async () => {
     const dead = await freePort(); // closed immediately — connection refused
     expect(await remoteVerify(`http://127.0.0.1:${dead}/mcp`, "tok", 150, 50)).toBe("unreachable");
+  });
+
+  it("retries a non-2xx (e.g. 503 from a half-initialized daemon) until a 2xx, then ok", async () => {
+    let n = 0;
+    const stub = await stubServer((_req, res) => {
+      n += 1;
+      res.writeHead(n === 1 ? 503 : 200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    try {
+      expect(await remoteVerify(stub.url, "tok", 1000, 50)).toBe("ok");
+      expect(n).toBeGreaterThanOrEqual(2); // first 503 was retried, not surfaced
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("does NOT read a 401 as success — retries it", async () => {
+    let n = 0;
+    const stub = await stubServer((_req, res) => {
+      n += 1;
+      res.writeHead(n === 1 ? 401 : 200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    try {
+      expect(await remoteVerify(stub.url, "tok", 1000, 50)).toBe("ok");
+      expect(n).toBe(2);
+    } finally {
+      await stub.close();
+    }
   });
 });
 
@@ -139,6 +165,42 @@ describe("rebind (U3) — transactional file rewrite", () => {
     expect(readFileSync(configPath(), "utf8")).toBe(cfgBefore);
     expect(readFileSync(plistPath(), "utf8")).toBe(plistBefore);
     expect(reloads).toBe(2); // reload, then re-reload after restore
+  });
+
+  it("rolls back config and plist when the remote verify is unreachable", async () => {
+    const cfgBefore = readFileSync(configPath(), "utf8");
+    const plistBefore = readFileSync(plistPath(), "utf8");
+    let reloads = 0;
+    await expect(
+      rebind("100.64.0.1", { reload: () => (reloads++, true), verify: async () => "unreachable" }),
+    ).rejects.toThrow(/did not come back|still restarting/i);
+    expect(readFileSync(configPath(), "utf8")).toBe(cfgBefore);
+    expect(readFileSync(plistPath(), "utf8")).toBe(plistBefore);
+    expect(reloads).toBe(2); // reload, then re-reload after restore
+  });
+
+  it("rolls back when reload itself throws (e.g. a hard launchctl reload failure)", async () => {
+    const cfgBefore = readFileSync(configPath(), "utf8");
+    const plistBefore = readFileSync(plistPath(), "utf8");
+    await expect(
+      rebind("100.64.0.1", {
+        reload: () => {
+          throw new Error("launchctl reload failed");
+        },
+        verify: async () => "ok",
+      }),
+    ).rejects.toThrow(/launchctl reload failed[\s\S]*Rolled back/i);
+    expect(readFileSync(configPath(), "utf8")).toBe(cfgBefore);
+    expect(readFileSync(plistPath(), "utf8")).toBe(plistBefore);
+  });
+
+  it("rewrites config only and creates no plist when none exists (manual serve / --no-plist)", async () => {
+    unlinkSync(plistPath()); // simulate an install without a LaunchAgent
+    const out = await rebind("100.64.0.1", okDeps);
+    expect(out).toContain("http://100.64.0.1:4319/mcp");
+    expect(existsSync(plistPath())).toBe(false); // not created
+    const cfg = JSON.parse(readFileSync(configPath(), "utf8")) as { url: string };
+    expect(cfg.url).toBe("http://100.64.0.1:4319/mcp");
   });
 
   it("writes files but skips verify when no launchd daemon is loaded", async () => {

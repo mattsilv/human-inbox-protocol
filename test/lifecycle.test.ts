@@ -1,25 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { statSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { join } from "node:path";
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const p = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(p));
-    });
-  });
-}
 import { buildPlist } from "../src/daemon/launchd.js";
 import { acquireDataDirLock, LockError } from "../src/daemon/lock.js";
 import { install, status, serve, runReindex } from "../src/cli/lifecycle.js";
 import { configPath, tokenPath, loadConfig } from "../src/cli/config.js";
 import { Store } from "../src/store/index.js";
-import { tmpRoot, cleanup } from "./helpers.js";
+import { tmpRoot, cleanup, freePort } from "./helpers.js";
 
 describe("daemon lifecycle (U8)", () => {
   let dataDir: string;
