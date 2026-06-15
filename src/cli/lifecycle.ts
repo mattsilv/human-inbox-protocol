@@ -1,18 +1,18 @@
 import type { Command } from "commander";
-import { existsSync, writeFileSync, mkdirSync, chmodSync, statSync, unlinkSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, statSync, unlinkSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { Store, defaultDataRoot, dataPaths, reindex, doctor, type DoctorIssue } from "../store/index.js";
+import { Store, defaultDataRoot, dataPaths, reindex, doctor, atomicWrite, type DoctorIssue } from "../store/index.js";
 import { HipDaemon, DEFAULT_HOST, DEFAULT_PORT } from "../daemon/server.js";
-import { hostPort } from "../daemon/host.js";
+import { hostPort, canonicalHost, isAllInterfaces, isLoopbackHost } from "../daemon/host.js";
 import { NudgeEngine } from "../daemon/nudge.js";
 import { generateToken } from "../daemon/auth.js";
 import { acquireDataDirLock } from "../daemon/lock.js";
-import { buildPlist, plistPath } from "../daemon/launchd.js";
+import { buildPlist, plistPath, LAUNCHD_LABEL } from "../daemon/launchd.js";
 import { registerAdminTools } from "../tools/admin.js";
 import { ensureActor } from "../domain/actors.js";
-import { loadConfig, writeConfig, configDir, tokenPath, ConfigError } from "./config.js";
+import { loadConfig, writeConfig, configDir, configPath, tokenPath, ConfigError } from "./config.js";
 import { HipClient } from "../client.js";
 import { spin, colorHeading } from "./tty.js";
 
@@ -104,9 +104,9 @@ export function install(opts: InstallOptions = {}): string {
   const root = defaultDataRoot();
   ensureDirMode(root, 0o700); // attention data is private
 
-  // Resolve the bind host once and use it for both the config url and the plist env,
-  // so the two writable sources and the daemon's allowlist agree byte-for-byte.
-  const bindHost = opts.host ?? host();
+  // Resolve + canonicalize the bind host once and use it for both the config url and the
+  // plist env, so the two writable sources and the daemon's allowlist agree byte-for-byte.
+  const bindHost = canonicalHost(opts.host ?? host());
 
   const token = generateToken();
 
@@ -323,6 +323,153 @@ export function update(opts: { pull?: boolean } = {}): number {
   return r.status ?? 1;
 }
 
+// ---- rebind ---------------------------------------------------------------
+
+const NONLOOPBACK_REMINDER =
+  "\n  security: bound beyond loopback — the bearer token is now the only gate. " +
+  "HIP cannot verify network ACLs are in place; restrict the port at the network layer " +
+  "(e.g. Tailscale ACLs) and keep the token 0600.";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Is the LaunchAgent loaded? Only meaningful on macOS; false elsewhere. */
+function underLaunchd(): boolean {
+  if (process.platform !== "darwin") return false;
+  const r = spawnSync("launchctl", ["list"], { encoding: "utf8" });
+  return r.status === 0 && (r.stdout ?? "").includes(LAUNCHD_LABEL);
+}
+
+/** Restart the LaunchAgent so it re-reads the plist env (and re-derives the allowlist). Returns false if no launchd daemon is loaded. */
+function launchctlReload(): boolean {
+  if (!underLaunchd()) return false;
+  const uid = process.getuid?.() ?? 0;
+  const kick = spawnSync("launchctl", ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`]);
+  if (kick.status !== 0) {
+    // Fallback: unload (ignore "not loaded") then load — mirrors scripts/update.sh.
+    const target = plistPath();
+    spawnSync("launchctl", ["unload", target]);
+    spawnSync("launchctl", ["load", target]);
+  }
+  return true;
+}
+
+export type VerifyResult = "ok" | "forbidden" | "unreachable";
+
+/**
+ * Verify the daemon admits a *remote* request on the new authority. This MUST be an
+ * authenticated POST: the daemon refuses non-POST with 405 and a missing Bearer with
+ * 401 *before* the DNS-rebinding Host/Origin check ever runs, so only an authenticated
+ * POST can produce the 403 that signals a stale allowlist. A 403 → the allowlist did not
+ * pick up the rebind; any other response → admitted. Connection errors are retried until
+ * the budget expires (the daemon may still be restarting), then reported unreachable.
+ */
+export async function remoteVerify(
+  url: string,
+  token: string,
+  budgetMs = 5000,
+  intervalMs = 250,
+): Promise<VerifyResult> {
+  const deadline = Date.now() + budgetMs;
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+  for (;;) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body,
+      });
+      return res.status === 403 ? "forbidden" : "ok";
+    } catch {
+      if (Date.now() >= deadline) return "unreachable";
+      await sleep(intervalMs);
+    }
+  }
+}
+
+export interface RebindDeps {
+  /** Reload the daemon; returns false when no launchd daemon is loaded. Injectable for tests. */
+  reload?: () => boolean;
+  /** Verify the remote path on the new url. Injectable for tests. */
+  verify?: (url: string, token: string) => Promise<VerifyResult>;
+}
+
+/**
+ * Transactionally rebind the daemon to `newHost`: reject all-interfaces, snapshot config
+ * + plist, rewrite both to the new authority, reload launchd, then verify the remote
+ * path. On any failure after the writes, roll back to the previous host. "Transactional
+ * with rollback", not a single atomic syscall — three writes plus a restart cannot be.
+ */
+export async function rebind(rawHost: string, deps: RebindDeps = {}): Promise<string> {
+  if (isAllInterfaces(rawHost)) {
+    throw new Error(
+      `refusing to bind ${rawHost} (all interfaces) — the bearer token would be the only gate on every network interface. Bind a specific host (loopback or a tailnet address) instead.`,
+    );
+  }
+  // Canonicalize so the plist HIP_HOST and the config url use one byte form.
+  const newHost = canonicalHost(rawHost);
+
+  const cfg = loadConfig(); // actionable ConfigError if not installed
+  const root = cfg.dataDir ?? defaultDataRoot();
+  const newUrl = urlFor(newHost);
+  const target = plistPath();
+
+  // Snapshot for rollback.
+  const cfgSnapshot = readFileSync(configPath(), "utf8");
+  const plistSnapshot = existsSync(target) ? readFileSync(target, "utf8") : null;
+
+  const restore = () => {
+    writeFileSync(configPath(), cfgSnapshot, { mode: 0o600 });
+    if (plistSnapshot !== null) atomicWrite(target, plistSnapshot);
+  };
+
+  // Rewrite config url (re-pass token/actorId/dataDir — there is no partial update) and,
+  // if a plist exists, regenerate it with the new HIP_HOST.
+  writeConfig({ url: newUrl, token: cfg.token, actorId: cfg.actorId, dataDir: cfg.dataDir });
+  if (plistSnapshot !== null) {
+    atomicWrite(
+      target,
+      buildPlist({
+        nodePath: process.execPath,
+        scriptPath: process.argv[1] ?? "hip",
+        dataDir: root,
+        configDir: configDir(),
+        host: newHost,
+        port: port(),
+        logDir: root,
+      }),
+    );
+  }
+
+  const reload = deps.reload ?? launchctlReload;
+  const verify = deps.verify ?? remoteVerify;
+
+  const reloaded = reload();
+  if (!reloaded) {
+    // No launchd daemon (manual `hip serve`, or non-macOS): files are written; the
+    // operator must restart the daemon themselves. Nothing to verify yet.
+    return `Rebound to ${newUrl}. No launchd daemon detected — restart your \`hip serve\` to pick up the new host (config + plist already written).`;
+  }
+
+  const result = await verify(newUrl, cfg.token);
+  if (result === "ok") {
+    return `Rebound to ${newUrl} — remote path verified.${isLoopbackHost(newHost) ? "" : NONLOOPBACK_REMINDER}`;
+  }
+
+  restore();
+  reload();
+  const why =
+    result === "forbidden"
+      ? "the daemon rejected the new Host (its allowlist did not pick up the rebind)"
+      : "the daemon did not come back on the new host (bind failed, or still restarting past the verify budget)";
+  throw new Error(`rebind to ${newHost} failed: ${why}. Rolled back to the previous host.`);
+}
+
 // ---- command registration -------------------------------------------------
 
 export function registerLifecycleCommands(program: Command): void {
@@ -343,8 +490,33 @@ export function registerLifecycleCommands(program: Command): void {
     .command("install")
     .description("Generate the token, seed actors, and write the LaunchAgent")
     .option("--owner-name <name>", "display name for the owner actor")
-    .action((opts: { ownerName?: string }) => {
-      process.stdout.write(install(opts.ownerName ? { ownerName: opts.ownerName } : {}) + "\n");
+    .option("--host <host>", "bind host (default loopback); for a running daemon use `hip rebind` instead")
+    .action((opts: { ownerName?: string; host?: string }) => {
+      // install does not reload a running daemon, so --host on a loaded daemon would
+      // leave the plist and the live allowlist mismatched — the silent desync rebind exists to prevent.
+      if (opts.host && underLaunchd()) {
+        process.stderr.write(
+          `hip: a daemon is already loaded — use \`hip rebind ${opts.host}\` to change the bind host safely (install does not reload).\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const installOpts: InstallOptions = {};
+      if (opts.ownerName) installOpts.ownerName = opts.ownerName;
+      if (opts.host) installOpts.host = opts.host;
+      process.stdout.write(install(installOpts) + "\n");
+    });
+
+  program
+    .command("rebind <host>")
+    .description("Rebind the daemon to a new host: rewrite config + plist, reload, and verify the remote path")
+    .action(async (host: string) => {
+      try {
+        process.stdout.write((await rebind(host)) + "\n");
+      } catch (e) {
+        process.stderr.write(`hip: ${e instanceof Error ? e.message : String(e)}\n`);
+        process.exitCode = 1;
+      }
     });
 
   program
