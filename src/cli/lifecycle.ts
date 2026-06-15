@@ -188,13 +188,87 @@ export async function status(): Promise<string> {
 }
 
 export async function runDoctor(): Promise<string> {
+  // Bind-reality checks are CLI-side (they need config/plist/fs, which the daemon-side
+  // store doctor does not have) and are merged into both the online and offline reports.
+  const bind = bindRealityChecks();
   return viaDaemonOrDirect(
     async (client) => {
-      const r = (await client.callOk("doctor_run")) as { ok: boolean; issues: { message: string }[] };
-      return formatDoctor(r);
+      const r = (await client.callOk("doctor_run")) as { ok: boolean; issues: DoctorIssue[] };
+      return formatDoctor(withBindChecks(r, bind));
     },
-    (store) => formatDoctor(doctor(store)) + "\n" + permsReport(),
+    (store) => formatDoctor(withBindChecks(doctor(store), bind)) + "\n" + permsReport(),
   );
+}
+
+/** Merge bind-reality issues into a store-doctor report, recomputing `ok` (errors flip it; warnings do not). */
+function withBindChecks(r: { ok: boolean; issues: DoctorIssue[] }, bind: DoctorIssue[]): { ok: boolean; issues: DoctorIssue[] } {
+  const issues = [...r.issues, ...bind];
+  return { ok: issues.every((i) => i.severity !== "error"), issues };
+}
+
+/** The host implied by the config url, or null if unparseable. */
+function hostFromUrl(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/** The HIP_HOST declared in the LaunchAgent plist, or null if no plist / no key. */
+function readPlistHost(): string | null {
+  const target = plistPath();
+  if (!existsSync(target)) return null;
+  const m = /<key>HIP_HOST<\/key>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
+  return m ? m[1]! : null;
+}
+
+/**
+ * CLI-side network/bind reality checks (KTD1): plist↔config host mismatch, an unsafe
+ * all-interfaces bind (error), a non-loopback bind reminder (warn), and dist staleness.
+ * Returns no issues when not installed.
+ */
+export function bindRealityChecks(): DoctorIssue[] {
+  const issues: DoctorIssue[] = [];
+  let cfg;
+  try {
+    cfg = loadConfig();
+  } catch {
+    return issues; // not installed — nothing to check
+  }
+
+  const cfgHost = hostFromUrl(cfg.url);
+  const plistHost = readPlistHost();
+
+  if (plistHost !== null && cfgHost !== null && canonicalHost(plistHost) !== canonicalHost(cfgHost)) {
+    issues.push({
+      severity: "error",
+      code: "host-mismatch",
+      message: `plist HIP_HOST (${plistHost}) != config url host (${cfgHost}) — run \`hip rebind\` to resync`,
+    });
+  }
+
+  const bindHost = cfgHost ?? plistHost;
+  if (bindHost) {
+    if (isAllInterfaces(bindHost)) {
+      issues.push({
+        severity: "error",
+        code: "bind-all-interfaces",
+        message: `daemon is bound to ${bindHost} (all interfaces) — never safe; \`hip rebind\` to a specific host`,
+      });
+    } else if (!isLoopbackHost(bindHost)) {
+      issues.push({
+        severity: "warn",
+        code: "non-loopback-bind",
+        message: `bound to ${bindHost} (non-loopback) — the bearer token is the only gate. HIP cannot verify network ACLs are in place; restrict the port at the network layer and keep the token 0600`,
+      });
+    }
+  }
+
+  const stale = checkDistStaleness();
+  if (stale) issues.push(stale);
+
+  return issues;
 }
 
 export async function runReindex(): Promise<string> {
@@ -237,9 +311,9 @@ async function viaDaemonOrDirect(
   }
 }
 
-function formatDoctor(r: { ok: boolean; issues: { message: string }[] }): string {
+function formatDoctor(r: { ok: boolean; issues: DoctorIssue[] }): string {
   if (r.ok && r.issues.length === 0) return "doctor: clean.";
-  return ["doctor:", ...r.issues.map((i) => `  - ${i.message}`)].join("\n");
+  return ["doctor:", ...r.issues.map((i) => `  - [${i.severity}] ${i.message}`)].join("\n");
 }
 
 /** Warn on loose permissions for the data dir and token file. */
@@ -535,7 +609,7 @@ export function registerLifecycleCommands(program: Command): void {
 
   program
     .command("doctor")
-    .description("Audit store consistency")
+    .description("Audit store consistency plus network/bind reality (host mismatch, bind safety, dist staleness)")
     .action(async () => {
       process.stdout.write((await runDoctor()) + "\n");
     });
