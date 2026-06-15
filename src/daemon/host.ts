@@ -20,8 +20,8 @@ export function canonicalHost(host: string): string {
 /**
  * `host:port`, canonicalizing then bracketing a bare IPv6 literal (e.g. `fd7a:…` →
  * `[fd7a:…]`) so it matches the `[v6]:port` form a client sends in the Host header and
- * forms a valid URL authority. Already-bracketed (`[::1]`) and IPv4/hostnames pass
- * through with only lowercasing applied.
+ * forms a valid URL authority. An already-bracketed IPv6 (`[::1]`) is unwrapped by
+ * `canonicalHost` and re-bracketed to the same form; IPv4/hostnames get only lowercasing.
  */
 export function hostPort(host: string, port: number): string {
   const c = canonicalHost(host);

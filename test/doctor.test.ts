@@ -47,8 +47,13 @@ describe("bindRealityChecks (U5)", () => {
     );
   }
 
-  it("is clean for a default loopback install", () => {
-    expect(bindRealityChecks()).toEqual([]);
+  it("reports no host/bind issues for a default loopback install", () => {
+    // dist-staleness is build-state dependent (and nondeterministic in a dev tree), so
+    // assert only on the bind-reality codes this unit owns.
+    const codes = bindRealityChecks().map((i) => i.code);
+    expect(codes).not.toContain("host-mismatch");
+    expect(codes).not.toContain("bind-all-interfaces");
+    expect(codes).not.toContain("non-loopback-bind");
   });
 
   it("warns (not errors) on a scoped non-loopback bind; ok stays true", async () => {

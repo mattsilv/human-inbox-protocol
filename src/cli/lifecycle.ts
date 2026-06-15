@@ -448,6 +448,7 @@ export async function remoteVerify(
   const deadline = Date.now() + budgetMs;
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
   for (;;) {
+    let status: number | null = null;
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -458,11 +459,17 @@ export async function remoteVerify(
         },
         body,
       });
-      return res.status === 403 ? "forbidden" : "ok";
+      status = res.status;
     } catch {
-      if (Date.now() >= deadline) return "unreachable";
-      await sleep(intervalMs);
+      status = null; // connection error — daemon may still be restarting
     }
+    // 403 = stale allowlist, fail fast (a restart won't change it without our reload).
+    // Only a clean 2xx counts as admitted; a 401/405/5xx from a half-initialized daemon
+    // must NOT read as success, so retry it like a connection error until the budget ends.
+    if (status === 403) return "forbidden";
+    if (status !== null && status >= 200 && status < 300) return "ok";
+    if (Date.now() >= deadline) return "unreachable";
+    await sleep(intervalMs);
   }
 }
 
