@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { Store, defaultDataRoot, dataPaths, reindex, doctor } from "../store/index.js";
 import { HipDaemon, DEFAULT_HOST, DEFAULT_PORT } from "../daemon/server.js";
+import { hostPort } from "../daemon/host.js";
 import { NudgeEngine } from "../daemon/nudge.js";
 import { generateToken } from "../daemon/auth.js";
 import { acquireDataDirLock } from "../daemon/lock.js";
@@ -24,8 +25,8 @@ function host(): string {
 function port(): number {
   return process.env.HIP_PORT ? Number.parseInt(process.env.HIP_PORT, 10) : DEFAULT_PORT;
 }
-function urlFor(): string {
-  return `http://${host()}:${port()}/mcp`;
+function urlFor(hostOverride?: string): string {
+  return `http://${hostPort(hostOverride ?? host(), port())}/mcp`;
 }
 
 // ---- serve ----------------------------------------------------------------
@@ -90,11 +91,17 @@ export async function serve(): Promise<ServeHandle> {
 export interface InstallOptions {
   ownerName?: string;
   writePlist?: boolean;
+  /** Bind host override; falls back to HIP_HOST/DEFAULT_HOST. Routed through `hostPort`. */
+  host?: string;
 }
 
 export function install(opts: InstallOptions = {}): string {
   const root = defaultDataRoot();
   ensureDirMode(root, 0o700); // attention data is private
+
+  // Resolve the bind host once and use it for both the config url and the plist env,
+  // so the two writable sources and the daemon's allowlist agree byte-for-byte.
+  const bindHost = opts.host ?? host();
 
   const token = generateToken();
 
@@ -107,7 +114,7 @@ export function install(opts: InstallOptions = {}): string {
     store.close();
   }
 
-  const written = writeConfig({ url: urlFor(), token, actorId: OWNER, dataDir: root });
+  const written = writeConfig({ url: urlFor(bindHost), token, actorId: OWNER, dataDir: root });
 
   const lines = [
     "HIP installed.",
@@ -115,7 +122,7 @@ export function install(opts: InstallOptions = {}): string {
     `  config:     ${written.configPath}`,
     `  token file: ${written.tokenPath} (0600)  — the token is NOT printed; read it from this file`,
     `  owner actor: ${OWNER}     cli actor: ${CLI_ACTOR}`,
-    `  url:        ${urlFor()}`,
+    `  url:        ${urlFor(bindHost)}`,
   ];
 
   if (opts.writePlist !== false) {
@@ -126,7 +133,7 @@ export function install(opts: InstallOptions = {}): string {
       scriptPath: process.argv[1] ?? "hip",
       dataDir: root,
       configDir: configDir(),
-      host: host(),
+      host: bindHost,
       port: port(),
       logDir: root,
     });
@@ -137,7 +144,7 @@ export function install(opts: InstallOptions = {}): string {
 
   lines.push("");
   lines.push("Connect a client (Hermes / Claude Code):");
-  lines.push(`  url=${urlFor()}  bearer=$(cat ${tokenPath()})  actorId=${OWNER}`);
+  lines.push(`  url=${urlFor(bindHost)}  bearer=$(cat ${tokenPath()})  actorId=${OWNER}`);
   return lines.join("\n");
 }
 
