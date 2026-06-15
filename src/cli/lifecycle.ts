@@ -1,9 +1,9 @@
 import type { Command } from "commander";
-import { existsSync, writeFileSync, mkdirSync, chmodSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync, chmodSync, statSync, unlinkSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { Store, defaultDataRoot, dataPaths, reindex, doctor } from "../store/index.js";
+import { Store, defaultDataRoot, dataPaths, reindex, doctor, type DoctorIssue } from "../store/index.js";
 import { HipDaemon, DEFAULT_HOST, DEFAULT_PORT } from "../daemon/server.js";
 import { hostPort } from "../daemon/host.js";
 import { NudgeEngine } from "../daemon/nudge.js";
@@ -38,6 +38,11 @@ export interface ServeHandle {
 
 export async function serve(): Promise<ServeHandle> {
   const cfg = loadConfig(); // throws an actionable ConfigError if not installed
+
+  // Best-effort: warn (never block) if the running source is ahead of the built dist.
+  const stale = checkDistStaleness();
+  if (stale) process.stderr.write(`hip: ${stale.message}\n`);
+
   const root = cfg.dataDir ?? defaultDataRoot();
   const paths = dataPaths(root);
 
@@ -266,6 +271,42 @@ function ensureDirMode(dir: string, mode: number): void {
 /** The repo root, derived from this file's location: dist/cli/lifecycle.js → ../../ */
 function repoRoot(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+/** Newest mtime (ms) of any file ending in `ext` under `dir`, recursively. 0 if none. */
+function newestMtime(dir: string, ext: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) newest = Math.max(newest, newestMtime(p, ext));
+    else if (entry.name.endsWith(ext)) newest = Math.max(newest, statSync(p).mtimeMs);
+  }
+  return newest;
+}
+
+/**
+ * Best-effort staleness hint (a `warn`, never an `error`): is the built dist older than
+ * the source? Catches a `git pull` without `hip update`. mtime is a weak proxy — an
+ * editor save / `touch` trips a false positive, a `cp -p` / restore a false negative —
+ * so the wording is hedged and this never gates startup. A recorded `dist/BUILD_SHA`
+ * would be the reliable mechanism (deferred). Returns null when `src/` is absent (npm
+ * package ships only dist) or `dist/cli/index.js` is absent (dev tree mid-build), so
+ * there are no false positives in either runtime. `root` is injectable for tests.
+ */
+export function checkDistStaleness(root: string = repoRoot()): DoctorIssue | null {
+  const srcDir = join(root, "src");
+  const distMarker = join(root, "dist", "cli", "index.js");
+  if (!existsSync(srcDir) || !existsSync(distMarker)) return null;
+  const newestSrc = newestMtime(srcDir, ".ts");
+  const distMtime = statSync(distMarker).mtimeMs;
+  if (newestSrc > distMtime) {
+    return {
+      severity: "warn",
+      code: "dist-stale",
+      message: "dist may be stale (src is newer than dist/cli/index.js) — run `hip update` to rebuild",
+    };
+  }
+  return null;
 }
 
 /** Pull latest, rebuild dist/, and restart the daemon via scripts/update.sh. */
