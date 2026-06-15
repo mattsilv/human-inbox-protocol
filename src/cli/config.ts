@@ -61,7 +61,10 @@ export function writeConfig(input: WriteConfigInput): { configPath: string; toke
   }
   const { token, ...rest } = input;
   writeFileSync(configPath(), JSON.stringify(rest, null, 2) + "\n", { mode: 0o600 });
-  writeFileSync(tokenPath(), token + "\n", { mode: 0o600 });
+  // No trailing newline: the file holds exactly the token, so an external consumer
+  // comparing raw bytes matches. `loadConfig` .trim()s, so legacy newlined files still
+  // load — the change is forward-only. See docs/binding.md (token-file format contract).
+  writeFileSync(tokenPath(), token, { mode: 0o600 });
   try {
     chmodSync(tokenPath(), 0o600);
     chmodSync(configPath(), 0o600);
