@@ -71,6 +71,24 @@ npm test            # vitest
 npm run hip -- --version
 ```
 
+## Runtime
+
+Pinned to **Node 24 LTS** (`.nvmrc` / `.node-version`). `better-sqlite3` is a native
+addon, so the daemon and your shell must run the **same** Node major — mixing versions
+gives a `NODE_MODULE_VERSION` mismatch. Node 26 works too, but rebuild the binding after
+switching (`npm run update` / `npm rebuild better-sqlite3`).
+
+The background daemon runs under launchd. Point its plist at a **versioned, pinned**
+runtime so a `brew upgrade` can't delete the binary out from under it:
+
+```bash
+brew install node@24 && brew pin node@24   # versioned keg, frozen against upgrade/GC
+# plist ProgramArguments[0] → /opt/homebrew/opt/node@24/bin/node  (opt path survives upgrades)
+```
+
+`hip doctor` flags a `launchd-node-missing` error if the plist's node binary has gone
+away — catch it before a reboot does.
+
 ## Storage model
 
 The `~/hip-data/` data directory is the unit of truth — **back up that one folder**.
