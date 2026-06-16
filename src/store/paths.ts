@@ -21,7 +21,10 @@ const DIR_BY_TYPE: Record<ObjectType, keyof DataPaths> = {
 };
 
 export function defaultDataRoot(): string {
-  return process.env.HIP_DATA_DIR ?? join(homedir(), "hip");
+  // `~/hip-data` (not `~/hip`) so the data dir is not confused with a `hip` source
+  // checkout. Existing installs pin their dir in config.json (dataDir), so this only
+  // changes where a fresh `hip install` puts data; HIP_DATA_DIR still overrides.
+  return process.env.HIP_DATA_DIR ?? join(homedir(), "hip-data");
 }
 
 export function dataPaths(root: string = defaultDataRoot()): DataPaths {

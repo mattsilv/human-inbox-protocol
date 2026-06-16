@@ -170,5 +170,5 @@ issues. Diagnose host-mismatch, bind safety, and staleness from the CLI.
 The daemon's durability story (see `README.md`): markdown files are the human-editable
 truth for tasks/decisions/entities/actors; SQLite holds the derived index/timers plus
 the **authoritative** envelope ledger and executions; an append-only `events.jsonl` is
-the audit + learning trail. The `~/hip/` data directory is the backup unit. None of
+the audit + learning trail. The `~/hip-data/` data directory is the backup unit. None of
 this is visible across the binding — clients see only tool calls and HIP objects.

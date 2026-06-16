@@ -73,7 +73,7 @@ npm run hip -- --version
 
 ## Storage model
 
-The `~/hip/` data directory is the unit of truth — **back up that one folder**.
+The `~/hip-data/` data directory is the unit of truth — **back up that one folder**.
 
 | Data | Home | Why |
 |------|------|-----|
