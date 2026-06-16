@@ -223,6 +223,14 @@ function readPlistHost(): string | null {
   return m ? m[1]! : null;
 }
 
+/** The node binary the LaunchAgent will exec (ProgramArguments[0]), or null if no plist. */
+function readPlistNodePath(): string | null {
+  const target = plistPath();
+  if (!existsSync(target)) return null;
+  const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
+  return m ? m[1]! : null;
+}
+
 /**
  * CLI-side network/bind reality checks (KTD1): plist↔config host mismatch, an unsafe
  * all-interfaces bind (error), a non-loopback bind reminder (warn), and dist staleness.
@@ -263,6 +271,19 @@ export function bindRealityChecks(): DoctorIssue[] {
         message: `bound to ${bindHost} (non-loopback) — the bearer token is the only gate. HIP cannot verify network ACLs are in place; restrict the port at the network layer and keep the token 0600`,
       });
     }
+  }
+
+  // The daemon cannot restart if its pinned node binary was removed — e.g. a Homebrew
+  // `node` upgrade garbage-collects the old Cellar version the plist points at. The
+  // running process survives in memory but the next reboot/reload kills it for good.
+  // Catch it here, before that happens, silently.
+  const nodePath = readPlistNodePath();
+  if (nodePath && !existsSync(nodePath)) {
+    issues.push({
+      severity: "error",
+      code: "launchd-node-missing",
+      message: `LaunchAgent node binary ${nodePath} is missing — the daemon will not restart (likely removed by a Homebrew upgrade). Point the plist at a pinned runtime (e.g. \`node@24\`) and reload.`,
+    });
   }
 
   const stale = checkDistStaleness();

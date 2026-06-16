@@ -36,7 +36,7 @@ describe("bindRealityChecks (U5)", () => {
     writeFileSync(
       plistPath(),
       buildPlist({
-        nodePath: "/usr/local/bin/node",
+        nodePath: process.execPath, // a node binary that actually exists (avoids tripping launchd-node-missing)
         scriptPath: "/x/hip",
         dataDir,
         configDir: configDirPath,
@@ -82,6 +82,23 @@ describe("bindRealityChecks (U5)", () => {
     writeConfig({ url: "http://0.0.0.0:4319/mcp", token: cfg.token, actorId: cfg.actorId, dataDir: cfg.dataDir });
     writePlistHost("0.0.0.0");
     const issue = bindRealityChecks().find((i) => i.code === "bind-all-interfaces");
+    expect(issue?.severity).toBe("error");
+  });
+
+  it("errors when the LaunchAgent node binary is missing (Homebrew-GC class of bug)", () => {
+    writeFileSync(
+      plistPath(),
+      buildPlist({
+        nodePath: "/opt/homebrew/Cellar/node/25.8.1/bin/node", // a path that does not exist
+        scriptPath: "/x/hip",
+        dataDir,
+        configDir: configDirPath,
+        host: "127.0.0.1",
+        port: 4319,
+        logDir: dataDir,
+      }),
+    );
+    const issue = bindRealityChecks().find((i) => i.code === "launchd-node-missing");
     expect(issue?.severity).toBe("error");
   });
 });
