@@ -270,6 +270,57 @@ describe("schema migration (task_tag, is_demo)", () => {
     db2.close();
     cleanup(root);
   });
+
+  it("upgrades a v2 DB (task_tag present, is_demo absent): ALTER adds is_demo, rows default 0", () => {
+    const root = tmpRoot();
+    const dbFile = join(root, "hip.db");
+    // Hand-build a v2 store: task_index without is_demo, task_tag present, user_version = 2.
+    const raw = new Database(dbFile);
+    raw.exec(
+      `CREATE TABLE task_index (id TEXT PRIMARY KEY, title TEXT, status TEXT, next_action_on TEXT,
+        waiting_on_actor TEXT, priority TEXT, content_hash TEXT, created_at TEXT, updated_at TEXT);
+       CREATE TABLE task_tag (task_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (task_id, tag));`,
+    );
+    raw.prepare(`INSERT INTO task_index (id, title, status) VALUES ('tsk_v2','keep','open')`).run();
+    raw.pragma("user_version = 2");
+    raw.close();
+
+    const db = openDb(dbFile);
+    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
+    expect(cols.some((c) => c.name === "is_demo")).toBe(true);
+    expect(db.prepare(`SELECT is_demo FROM task_index WHERE id='tsk_v2'`).get()).toEqual({
+      is_demo: 0,
+    });
+    db.close();
+    cleanup(root);
+  });
+});
+
+describe("indexer is_demo derivation (U2)", () => {
+  let root: string;
+  let store: Store;
+  beforeEach(() => {
+    root = tmpRoot();
+    store = new Store({ root });
+  });
+  afterEach(() => {
+    store.close();
+    cleanup(root);
+  });
+
+  function isDemo(id: string): number {
+    return (store.db.prepare(`SELECT is_demo FROM task_index WHERE id = ?`).get(id) as {
+      is_demo: number;
+    }).is_demo;
+  }
+
+  it("derives is_demo from _meta.demo, defaulting to 0 for every other shape", () => {
+    expect(isDemo(makeTask(store, { _meta: { demo: true } }).id)).toBe(1);
+    expect(isDemo(makeTask(store, { _meta: { demo: false } }).id)).toBe(0);
+    expect(isDemo(makeTask(store, { _meta: { other: true } }).id)).toBe(0);
+    expect(isDemo(makeTask(store, {}).id)).toBe(0);
+  });
 });
 
 describe("task_tag indexing (U2)", () => {

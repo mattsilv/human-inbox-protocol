@@ -95,6 +95,32 @@ describe("demo auto-cleanup (U3/U4)", () => {
     expect(existsSync(realFile)).toBe(true);
   });
 
+  it("cleanDemoData sweeps a task-less escalation decision via its demo envelope prefix", () => {
+    // The demo's reconcile escalation creates a decision with NO task link, found only
+    // through its `env_demo`-prefixed envelope. A regression here leaks it past cleanup.
+    const realId = realTask("real task");
+    const demoId = demoTask("demo seed");
+    const esc = d.createDecision({ prompt: "where does this go?", kind: "escalation" }, MATT);
+    expect(esc.task ?? null).toBeNull(); // task-less, like the real escalation path
+    store.db
+      .prepare(`INSERT INTO envelopes (id, kind, task_id, decision_id, created_at) VALUES (?,?,?,?,?)`)
+      .run("env_demo_reservation_1", "email", null, esc.id, store.nowIso());
+
+    const escFile = filePath(store.paths, "decision", esc.id);
+    expect(existsSync(escFile)).toBe(true);
+
+    const spy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    cleanDemoData(store);
+    spy.mockRestore();
+
+    expect(count(`SELECT COUNT(*) AS n FROM decision_index WHERE id = ?`, esc.id)).toBe(0);
+    expect(count(`SELECT COUNT(*) AS n FROM envelopes WHERE id LIKE 'env_demo%'`)).toBe(0);
+    expect(existsSync(escFile)).toBe(false);
+    // Real task and its file survive.
+    expect(count(`SELECT COUNT(*) AS n FROM task_index WHERE id = ?`, realId)).toBe(1);
+    void demoId;
+  });
+
   it("cleanDemoData is idempotent with no demo data (no errors)", () => {
     realTask("real");
     expect(() => {
