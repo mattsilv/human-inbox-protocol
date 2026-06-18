@@ -225,8 +225,8 @@ describe("store layer (U2)", () => {
   });
 });
 
-describe("schema migration v1→v2 (task_tag)", () => {
-  it("upgrades a v1 DB: creates task_tag, bumps user_version, preserves rows", () => {
+describe("schema migration (task_tag, is_demo)", () => {
+  it("upgrades a v1 DB: creates task_tag, adds is_demo, bumps user_version, preserves rows", () => {
     const root = tmpRoot();
     const dbFile = join(root, "hip.db");
     // Hand-build a v1 store: task_index only, no task_tag, user_version = 1.
@@ -240,27 +240,33 @@ describe("schema migration v1→v2 (task_tag)", () => {
     raw.close();
 
     const db = openDb(dbFile);
-    expect(SCHEMA_VERSION).toBe(2);
-    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(SCHEMA_VERSION).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(3);
     const tbl = db
       .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_tag'`)
       .get();
     expect(tbl).toBeTruthy();
-    expect(db.prepare(`SELECT title FROM task_index WHERE id='tsk_a'`).get()).toEqual({
+    // is_demo added by the v3 ALTER; the pre-existing row defaults to 0.
+    const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
+    expect(cols.some((c) => c.name === "is_demo")).toBe(true);
+    expect(db.prepare(`SELECT title, is_demo FROM task_index WHERE id='tsk_a'`).get()).toEqual({
       title: "keep",
+      is_demo: 0,
     });
     db.close();
     cleanup(root);
   });
 
-  it("opening an already-v2 DB is an idempotent no-op", () => {
+  it("opening an already-current DB is an idempotent no-op (no duplicate-column error)", () => {
     const root = tmpRoot();
     const dbFile = join(root, "hip.db");
+    // Fresh DB gets is_demo from SCHEMA; reopening must not re-run ALTER (would throw
+    // "duplicate column name") — the table_info guard handles this.
     const db1 = openDb(dbFile);
-    expect(db1.pragma("user_version", { simple: true })).toBe(2);
+    expect(db1.pragma("user_version", { simple: true })).toBe(3);
     db1.close();
     const db2 = openDb(dbFile);
-    expect(db2.pragma("user_version", { simple: true })).toBe(2);
+    expect(db2.pragma("user_version", { simple: true })).toBe(3);
     db2.close();
     cleanup(root);
   });

@@ -13,6 +13,7 @@ import type {
 } from "../types.js";
 import { validation, stateError } from "./errors.js";
 import { mutateMarkdown, requireActor } from "./util.js";
+import { maybeCleanDemo } from "./demo-cleanup.js";
 
 export interface CreateTaskInput {
   title: string;
@@ -81,6 +82,9 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
     [{ type: "task", obj: task as unknown as Record<string, unknown> }],
     [event(store, id, actorId, "created", { delegatedBy: input.delegatedBy })],
   );
+  // First real task created after a `hip demo` run sweeps the demo seed. Guarded on the
+  // demo flag so seeding's own task_create calls never trigger a recursive cleanup.
+  if (!input._meta?.demo) maybeCleanDemo(store);
   return task;
 }
 

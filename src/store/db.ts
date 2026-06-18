@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { ensureDir } from "./atomic.js";
 import { dirname } from "node:path";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // Tables rebuilt from files by `reindex`. Everything here is a cache of file truth.
 const DERIVED_TABLES = [
@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS task_index (
   priority TEXT,
   content_hash TEXT,
   created_at TEXT,
-  updated_at TEXT
+  updated_at TEXT,
+  is_demo INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_task_status ON task_index(status);
 CREATE INDEX IF NOT EXISTS idx_task_waiting_actor ON task_index(waiting_on_actor);
@@ -150,6 +151,19 @@ export function openDb(dbFile: string): Db {
   // v1 store keeps its rows — the migration is additive (new table only).
   db.exec(SCHEMA);
   const current = db.pragma("user_version", { simple: true }) as number;
+  // v3: is_demo on task_index. A fresh DB (0) already has the column from SCHEMA, so
+  // guard the ALTER with a column-existence check (SQLite has no ADD COLUMN IF NOT
+  // EXISTS) — it fires only on a real v0/v1/v2 upgrade where the column is absent. The
+  // index lives here, not in SCHEMA: on a pre-v3 DB task_index already exists without
+  // is_demo, so an index over that column in the SCHEMA exec would throw before the
+  // ALTER runs. Created unconditionally inside the guard so fresh DBs get it too.
+  if (current < 3) {
+    const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "is_demo")) {
+      db.exec(`ALTER TABLE task_index ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_task_demo ON task_index(is_demo)`);
+  }
   if (current < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
   return db;
 }
