@@ -26,6 +26,12 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
         references: z.array(zReference).optional(),
         tags: z.array(z.string()).optional().describe('Flat labels, e.g. ["protocol-gap"] for a dogfood gap'),
         waitingOn: zWaiting.optional(),
+        demoSeed: z
+          .boolean()
+          .optional()
+          .describe(
+            "Internal: marks a `hip demo` seed task (sets _meta.demo). Auto-cleanup removes these on first real task creation — do not set on real tasks.",
+          ),
       },
     },
     async (a) =>
@@ -43,6 +49,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
             ...(a.references ? { references: a.references as Reference[] } : {}),
             ...(a.tags ? { tags: a.tags } : {}),
             ...(a.waitingOn ? { waitingOn: a.waitingOn } : {}),
+            ...(a.demoSeed ? { _meta: { demo: true } } : {}),
           },
           a.actorId,
         );

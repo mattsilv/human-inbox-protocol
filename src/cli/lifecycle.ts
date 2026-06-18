@@ -282,7 +282,7 @@ export function bindRealityChecks(): DoctorIssue[] {
     issues.push({
       severity: "error",
       code: "launchd-node-missing",
-      message: `LaunchAgent node binary ${nodePath} is missing — the daemon will not restart (likely removed by a Homebrew upgrade). Point the plist at a pinned runtime (e.g. \`node@24\`) and reload.`,
+      message: `LaunchAgent node binary ${nodePath} is missing — the daemon will not restart (likely removed by a Homebrew upgrade). Point the plist at a pinned runtime (e.g. \`node@26\`) and reload.`,
     });
   }
 

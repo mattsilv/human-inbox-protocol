@@ -5,6 +5,7 @@ import type { WireTask, Decision } from "../types.js";
 import { withClient, withClientVoid } from "./run.js";
 import { spin, colorHeading, colorDim, glyph, isInteractive } from "./tty.js";
 import { interactiveInbox } from "./interactive.js";
+import { DEMO_ENVELOPE_PREFIX } from "../domain/demo-cleanup.js";
 
 // `hip demo` seeds one believable, specific example per distinct HIP scenario so a
 // first-timer running the inbox immediately sees the full range of what HIP does. It
@@ -15,7 +16,7 @@ import { interactiveInbox } from "./interactive.js";
 const ALEX = "act_demo_alex";
 const AGENT = "act_demo_agent";
 const PLUMBER = "act_demo_plumber";
-const DEMO_ENV_PREFIX = "env_demo";
+const DEMO_ENV_PREFIX = DEMO_ENVELOPE_PREFIX;
 
 /** Create an actor, tolerating "already exists" so the demo is re-runnable. */
 async function ensureActor(
@@ -31,15 +32,12 @@ async function ensureActor(
   }
 }
 
-/** Tag a task as demo-seeded so resetDemo can find and drop it later. */
-async function tagDemo(client: HipClient, owner: string, taskId: string): Promise<void> {
-  await client.callOk("task_update", { actorId: owner, id: taskId, patch: { _meta: { demo: true } } });
-}
-
 /**
  * Register an execution and block it on a human decision (an agent hitting a fork).
- * Returns the created decision id so callers can snooze it. The task is demo-tagged and
- * the decision carries `task`, so resetDemo reaches it via the task link.
+ * Returns the created decision id so callers can snooze it. The task is demo-tagged at
+ * creation (`_meta.demo`) — tagging inline, not via a follow-up update, is required so
+ * the maybeCleanDemo hook in createTask sees the demo flag and skips the seed task.
+ * The decision carries `task`, so resetDemo reaches it via the task link.
  */
 async function blockedTask(
   client: HipClient,
@@ -54,8 +52,8 @@ async function blockedTask(
     title,
     ...(description ? { description } : {}),
     delegatedBy: { actor: owner, role: "creator" },
+    demoSeed: true,
   })) as { id: string };
-  await tagDemo(client, owner, t.id);
   const exe = (await client.callOk("execution_register", { actorId: AGENT, task: t.id, actor: AGENT })) as {
     id: string;
   };
@@ -79,8 +77,10 @@ async function openTask(
     actorId: owner,
     title,
     delegatedBy: { actor: owner, role: "creator" },
+    demoSeed: true,
   })) as { id: string };
-  await client.callOk("task_update", { actorId: owner, id: t.id, patch: { ...(patch ?? {}), _meta: { demo: true } } });
+  // Tagged at creation above; only apply the extra patch (e.g. priority) if present.
+  if (patch) await client.callOk("task_update", { actorId: owner, id: t.id, patch });
   return t.id;
 }
 
