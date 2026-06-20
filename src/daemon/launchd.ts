@@ -1,5 +1,8 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import type { ServiceManager, UnitOptions } from "./service-manager.js";
 
 export const LAUNCHD_LABEL = "ai.hip.daemon";
 
@@ -70,4 +73,82 @@ function escapeXml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/**
+ * macOS launchd implementation of the service-manager seam. Wraps the existing
+ * `buildPlist`/`plistPath` plus the launchctl reload/list logic moved verbatim from
+ * `src/cli/lifecycle.ts` — no behavior change. All spawns carry a timeout so a stuck
+ * launchd/mach port cannot hang the event loop.
+ */
+export class LaunchdManager implements ServiceManager {
+  readonly name = "launchd";
+
+  unitPath(): string {
+    return plistPath();
+  }
+
+  buildUnit(opts: UnitOptions): string {
+    return buildPlist(opts);
+  }
+
+  /** Write the plist (load stays a manual `launchctl load` step, as before). */
+  writeUnit(unitText: string): string[] {
+    const target = plistPath();
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, unitText);
+    return [`  LaunchAgent: ${target}`, `  load it:    launchctl load ${target}`];
+  }
+
+  remove(): string {
+    const target = plistPath();
+    if (existsSync(target)) {
+      unlinkSync(target);
+      return `Removed LaunchAgent ${target}. Run \`launchctl unload ${target}\` if it is still loaded. Data dir left intact.`;
+    }
+    return "No LaunchAgent installed.";
+  }
+
+  /** Is the LaunchAgent loaded? Only meaningful on macOS; false elsewhere. */
+  isLoaded(): boolean {
+    if (process.platform !== "darwin") return false;
+    const r = spawnSync("launchctl", ["list"], { encoding: "utf8", timeout: 5000 });
+    return r.status === 0 && (r.stdout ?? "").includes(LAUNCHD_LABEL);
+  }
+
+  /**
+   * Restart the LaunchAgent so it re-reads the plist env (and re-derives the allowlist).
+   * Returns false if no launchd daemon is loaded; throws if a daemon IS loaded but every
+   * restart path fails.
+   */
+  reload(): boolean {
+    if (!this.isLoaded()) return false;
+    const uid = process.getuid?.() ?? 0;
+    const kick = spawnSync("launchctl", ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`], { timeout: 10000 });
+    if (kick.status === 0) return true;
+    // Fallback: unload (ignore "not loaded") then load — mirrors scripts/update.sh.
+    const target = plistPath();
+    spawnSync("launchctl", ["unload", target], { timeout: 10000 });
+    const load = spawnSync("launchctl", ["load", target], { timeout: 10000 });
+    if (load.status !== 0) {
+      throw new Error(`launchctl reload failed — kickstart and unload/load both failed for ${LAUNCHD_LABEL}`);
+    }
+    return true;
+  }
+
+  /** The HIP_HOST declared in the installed plist, or null if no plist / no key. */
+  readUnitHost(): string | null {
+    const target = plistPath();
+    if (!existsSync(target)) return null;
+    const m = /<key>HIP_HOST<\/key>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
+    return m ? m[1]! : null;
+  }
+
+  /** The node binary the LaunchAgent will exec (ProgramArguments[0]), or null if no plist. */
+  readUnitNodePath(): string | null {
+    const target = plistPath();
+    if (!existsSync(target)) return null;
+    const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
+    return m ? m[1]! : null;
+  }
 }

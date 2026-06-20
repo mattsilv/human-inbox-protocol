@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, statSync, unlinkSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, statSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -9,7 +9,7 @@ import { hostPort, canonicalHost, isAllInterfaces, isLoopbackHost } from "../dae
 import { NudgeEngine } from "../daemon/nudge.js";
 import { generateToken } from "../daemon/auth.js";
 import { acquireDataDirLock } from "../daemon/lock.js";
-import { buildPlist, plistPath, LAUNCHD_LABEL } from "../daemon/launchd.js";
+import { selectServiceManager, type ServiceManager } from "../daemon/service-manager.js";
 import { registerAdminTools } from "../tools/admin.js";
 import { ensureActor } from "../domain/actors.js";
 import { loadConfig, writeConfig, configDir, configPath, tokenPath, ConfigError } from "./config.js";
@@ -131,9 +131,8 @@ export function install(opts: InstallOptions = {}): string {
   ];
 
   if (opts.writePlist !== false) {
-    const target = plistPath();
-    mkdirSync(dirname(target), { recursive: true });
-    const plist = buildPlist({
+    const mgr = selectServiceManager();
+    const unit = mgr.buildUnit({
       nodePath: process.execPath,
       scriptPath: process.argv[1] ?? "hip",
       dataDir: root,
@@ -142,9 +141,7 @@ export function install(opts: InstallOptions = {}): string {
       port: port(),
       logDir: root,
     });
-    writeFileSync(target, plist);
-    lines.push(`  LaunchAgent: ${target}`);
-    lines.push(`  load it:    launchctl load ${target}`);
+    lines.push(...mgr.writeUnit(unit));
   }
 
   lines.push("");
@@ -154,12 +151,7 @@ export function install(opts: InstallOptions = {}): string {
 }
 
 export function uninstall(): string {
-  const target = plistPath();
-  if (existsSync(target)) {
-    unlinkSync(target);
-    return `Removed LaunchAgent ${target}. Run \`launchctl unload ${target}\` if it is still loaded. Data dir left intact.`;
-  }
-  return "No LaunchAgent installed.";
+  return selectServiceManager().remove();
 }
 
 // ---- status / doctor / reindex -------------------------------------------
@@ -215,26 +207,11 @@ function hostFromUrl(url: string): string | null {
   }
 }
 
-/** The HIP_HOST declared in the LaunchAgent plist, or null if no plist / no key. */
-function readPlistHost(): string | null {
-  const target = plistPath();
-  if (!existsSync(target)) return null;
-  const m = /<key>HIP_HOST<\/key>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
-  return m ? m[1]! : null;
-}
-
-/** The node binary the LaunchAgent will exec (ProgramArguments[0]), or null if no plist. */
-function readPlistNodePath(): string | null {
-  const target = plistPath();
-  if (!existsSync(target)) return null;
-  const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
-  return m ? m[1]! : null;
-}
-
 /**
- * CLI-side network/bind reality checks (KTD1): plist↔config host mismatch, an unsafe
+ * CLI-side network/bind reality checks (KTD1): unit↔config host mismatch, an unsafe
  * all-interfaces bind (error), a non-loopback bind reminder (warn), and dist staleness.
- * Returns no issues when not installed.
+ * Returns no issues when not installed. Unit introspection is routed through the active
+ * service manager (launchd plist / systemd unit).
  */
 export function bindRealityChecks(): DoctorIssue[] {
   const issues: DoctorIssue[] = [];
@@ -245,18 +222,19 @@ export function bindRealityChecks(): DoctorIssue[] {
     return issues; // not installed — nothing to check
   }
 
+  const mgr = selectServiceManager();
   const cfgHost = hostFromUrl(cfg.url);
-  const plistHost = readPlistHost();
+  const unitHost = mgr.readUnitHost();
 
-  if (plistHost !== null && cfgHost !== null && canonicalHost(plistHost) !== canonicalHost(cfgHost)) {
+  if (unitHost !== null && cfgHost !== null && canonicalHost(unitHost) !== canonicalHost(cfgHost)) {
     issues.push({
       severity: "error",
       code: "host-mismatch",
-      message: `plist HIP_HOST (${plistHost}) != config url host (${cfgHost}) — run \`hip rebind\` to resync`,
+      message: `${mgr.name} HIP_HOST (${unitHost}) != config url host (${cfgHost}) — run \`hip rebind\` to resync`,
     });
   }
 
-  const bindHost = cfgHost ?? plistHost;
+  const bindHost = cfgHost ?? unitHost;
   if (bindHost) {
     if (isAllInterfaces(bindHost)) {
       issues.push({
@@ -274,15 +252,15 @@ export function bindRealityChecks(): DoctorIssue[] {
   }
 
   // The daemon cannot restart if its pinned node binary was removed — e.g. a Homebrew
-  // `node` upgrade garbage-collects the old Cellar version the plist points at. The
+  // `node` upgrade garbage-collects the old Cellar version the unit points at. The
   // running process survives in memory but the next reboot/reload kills it for good.
   // Catch it here, before that happens, silently.
-  const nodePath = readPlistNodePath();
+  const nodePath = mgr.readUnitNodePath();
   if (nodePath && !existsSync(nodePath)) {
     issues.push({
       severity: "error",
       code: "launchd-node-missing",
-      message: `LaunchAgent node binary ${nodePath} is missing — the daemon will not restart (likely removed by a Homebrew upgrade). Point the plist at a pinned runtime (e.g. \`node@26\`) and reload.`,
+      message: `${mgr.name} node binary ${nodePath} is missing — the daemon will not restart (likely removed by a Homebrew upgrade). Point the unit at a pinned runtime (e.g. \`node@26\`) and reload.`,
     });
   }
 
@@ -435,36 +413,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Is the LaunchAgent loaded? Only meaningful on macOS; false elsewhere. */
-function underLaunchd(): boolean {
-  if (process.platform !== "darwin") return false;
-  // timeout so a wedged launchd can't hang the event loop indefinitely.
-  const r = spawnSync("launchctl", ["list"], { encoding: "utf8", timeout: 5000 });
-  return r.status === 0 && (r.stdout ?? "").includes(LAUNCHD_LABEL);
-}
-
-/**
- * Restart the LaunchAgent so it re-reads the plist env (and re-derives the allowlist).
- * Returns false if no launchd daemon is loaded; throws if a daemon IS loaded but every
- * restart path fails — so rebind reports a reload failure rather than misattributing it
- * to a bind/allowlist failure. All spawns carry a timeout so a stuck launchd/mach port
- * cannot hang the process.
- */
-function launchctlReload(): boolean {
-  if (!underLaunchd()) return false;
-  const uid = process.getuid?.() ?? 0;
-  const kick = spawnSync("launchctl", ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`], { timeout: 10000 });
-  if (kick.status === 0) return true;
-  // Fallback: unload (ignore "not loaded") then load — mirrors scripts/update.sh.
-  const target = plistPath();
-  spawnSync("launchctl", ["unload", target], { timeout: 10000 });
-  const load = spawnSync("launchctl", ["load", target], { timeout: 10000 });
-  if (load.status !== 0) {
-    throw new Error(`launchctl reload failed — kickstart and unload/load both failed for ${LAUNCHD_LABEL}`);
-  }
-  return true;
-}
-
 export type VerifyResult = "ok" | "forbidden" | "unreachable";
 
 /**
@@ -513,15 +461,17 @@ export async function remoteVerify(
 }
 
 export interface RebindDeps {
-  /** Reload the daemon; returns false when no launchd daemon is loaded. Injectable for tests. */
+  /** Reload the daemon; returns false when no service is loaded. Injectable for tests. */
   reload?: () => boolean;
   /** Verify the remote path on the new url. Injectable for tests. */
   verify?: (url: string, token: string) => Promise<VerifyResult>;
+  /** Service manager (unit build/path/reload). Injectable for tests; defaults to the platform manager. */
+  manager?: ServiceManager;
 }
 
 /**
  * Transactionally rebind the daemon to `newHost`: reject all-interfaces, snapshot config
- * + plist, rewrite both to the new authority, reload launchd, then verify the remote
+ * + unit, rewrite both to the new authority, reload the service, then verify the remote
  * path. On any failure after the writes, roll back to the previous host. "Transactional
  * with rollback", not a single atomic syscall — three writes plus a restart cannot be.
  */
@@ -536,30 +486,31 @@ export async function rebind(rawHost: string, deps: RebindDeps = {}): Promise<st
       `refusing to bind ${rawHost} (all interfaces) — the bearer token would be the only gate on every network interface. Bind a specific host (loopback or a tailnet address) instead.`,
     );
   }
-  // Canonicalize so the plist HIP_HOST and the config url use one byte form.
+  // Canonicalize so the unit HIP_HOST and the config url use one byte form.
   const newHost = canonicalHost(rawHost);
 
+  const mgr = deps.manager ?? selectServiceManager();
   const cfg = loadConfig(); // actionable ConfigError if not installed
   const root = cfg.dataDir ?? defaultDataRoot();
   const newUrl = urlFor(newHost);
-  const target = plistPath();
+  const target = mgr.unitPath();
 
   // Snapshot for rollback.
   const cfgSnapshot = readFileSync(configPath(), "utf8");
-  const plistSnapshot = existsSync(target) ? readFileSync(target, "utf8") : null;
+  const unitSnapshot = existsSync(target) ? readFileSync(target, "utf8") : null;
 
   const restore = () => {
     writeFileSync(configPath(), cfgSnapshot, { mode: 0o600 });
-    if (plistSnapshot !== null) atomicWrite(target, plistSnapshot);
+    if (unitSnapshot !== null) atomicWrite(target, unitSnapshot);
   };
 
   // Rewrite config url (re-pass token/actorId/dataDir — there is no partial update) and,
-  // if a plist exists, regenerate it with the new HIP_HOST.
+  // if a unit exists, regenerate it with the new HIP_HOST.
   writeConfig({ url: newUrl, token: cfg.token, actorId: cfg.actorId, dataDir: cfg.dataDir });
-  if (plistSnapshot !== null) {
+  if (unitSnapshot !== null) {
     atomicWrite(
       target,
-      buildPlist({
+      mgr.buildUnit({
         nodePath: process.execPath,
         scriptPath: process.argv[1] ?? "hip",
         dataDir: root,
@@ -571,7 +522,7 @@ export async function rebind(rawHost: string, deps: RebindDeps = {}): Promise<st
     );
   }
 
-  const reload = deps.reload ?? launchctlReload;
+  const reload = deps.reload ?? (() => mgr.reload());
   const verify = deps.verify ?? remoteVerify;
 
   const rollback = (reason: string): never => {
@@ -588,9 +539,9 @@ export async function rebind(rawHost: string, deps: RebindDeps = {}): Promise<st
   try {
     const reloaded = reload();
     if (!reloaded) {
-      // No launchd daemon (manual `hip serve`, or non-macOS): files are written; the
-      // operator must restart the daemon themselves. Nothing to verify yet.
-      return `Rebound to ${newUrl}. No launchd daemon detected — restart your \`hip serve\` to pick up the new host (config + plist already written).`;
+      // No managed service (manual `hip serve`): files are written; the operator must
+      // restart the daemon themselves. Nothing to verify yet.
+      return `Rebound to ${newUrl}. No ${mgr.name} service detected — restart your \`hip serve\` to pick up the new host (config + unit already written).`;
     }
     result = await verify(newUrl, cfg.token);
   } catch (e) {
@@ -633,8 +584,8 @@ export function registerLifecycleCommands(program: Command): void {
     .option("--host <host>", "bind host (default loopback); for a running daemon use `hip rebind` instead")
     .action((opts: { ownerName?: string; host?: string }) => {
       // install does not reload a running daemon, so --host on a loaded daemon would
-      // leave the plist and the live allowlist mismatched — the silent desync rebind exists to prevent.
-      if (opts.host && underLaunchd()) {
+      // leave the unit and the live allowlist mismatched — the silent desync rebind exists to prevent.
+      if (opts.host && selectServiceManager().isLoaded()) {
         process.stderr.write(
           `hip: a daemon is already loaded — use \`hip rebind ${opts.host}\` to change the bind host safely (install does not reload).\n`,
         );
