@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { ensureDir } from "./atomic.js";
 import { dirname } from "node:path";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 
 // Tables rebuilt from files by `reindex`. Everything here is a cache of file truth.
 const DERIVED_TABLES = [
@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS task_index (
   priority TEXT,
   content_hash TEXT,
   created_at TEXT,
-  updated_at TEXT
+  updated_at TEXT,
+  is_demo INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_task_status ON task_index(status);
 CREATE INDEX IF NOT EXISTS idx_task_waiting_actor ON task_index(waiting_on_actor);
@@ -134,6 +135,19 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 CREATE INDEX IF NOT EXISTS idx_exec_task ON executions(task_id);
 CREATE INDEX IF NOT EXISTS idx_exec_blocked ON executions(blocked_on);
+
+-- AUTHORITATIVE: client-supplied idempotency keys for task_create / execution_register.
+-- Write-once, keyed (actor_id, client_key); mirrors the envelopes ledger so a remote
+-- agent on a flaky link can retry a create without duplicating. Not rebuilt by reindex.
+CREATE TABLE IF NOT EXISTS creation_keys (
+  actor_id TEXT NOT NULL,
+  client_key TEXT NOT NULL,
+  object_type TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (actor_id, client_key)
+);
 `;
 
 export type Db = Database.Database;
@@ -145,11 +159,25 @@ export function openDb(dbFile: string): Db {
   db.pragma("synchronous = NORMAL");
   db.pragma("busy_timeout = 5000");
   // SCHEMA is all `IF NOT EXISTS`, so it brings any older DB up to the current table
-  // set on open (e.g. task_tag for a v1 store). The version pragma is bookkeeping:
-  // a fresh DB (0) and any pre-HEAD DB both advance to SCHEMA_VERSION; an existing
-  // v1 store keeps its rows — the migration is additive (new table only).
+  // set on open (e.g. task_tag for a v1 store, creation_keys for a v3 store). The
+  // version pragma is bookkeeping: a fresh DB (0) and any pre-HEAD DB both advance to
+  // SCHEMA_VERSION; an existing store keeps its rows — additive migrations that only add
+  // a new table (e.g. creation_keys at v4) need no ALTER, just the IF NOT EXISTS create.
   db.exec(SCHEMA);
   const current = db.pragma("user_version", { simple: true }) as number;
+  // v3: is_demo on task_index. A fresh DB (0) already has the column from SCHEMA, so
+  // guard the ALTER with a column-existence check (SQLite has no ADD COLUMN IF NOT
+  // EXISTS) — it fires only on a real v0/v1/v2 upgrade where the column is absent. The
+  // index lives here, not in SCHEMA: on a pre-v3 DB task_index already exists without
+  // is_demo, so an index over that column in the SCHEMA exec would throw before the
+  // ALTER runs. Created unconditionally inside the guard so fresh DBs get it too.
+  if (current < 3) {
+    const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "is_demo")) {
+      db.exec(`ALTER TABLE task_index ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_task_demo ON task_index(is_demo)`);
+  }
   if (current < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
   return db;
 }

@@ -13,6 +13,8 @@ import type {
 } from "../types.js";
 import { validation, stateError } from "./errors.js";
 import { mutateMarkdown, requireActor } from "./util.js";
+import { maybeCleanDemo } from "./demo-cleanup.js";
+import { payloadHash, resolveCreationKey } from "./idempotency.js";
 
 export interface CreateTaskInput {
   title: string;
@@ -27,6 +29,8 @@ export interface CreateTaskInput {
   tags?: string[];
   waitingOn?: Waiting;
   _meta?: Record<string, unknown>;
+  /** Optional client idempotency key: a retried create with the same key returns the original task. */
+  clientKey?: string;
 }
 
 // task_update may touch content only; transitions go through dedicated verbs.
@@ -51,6 +55,22 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   requireActor(actorId);
   if (!input.title) throw validation("task.title is required");
   if (!input.delegatedBy?.actor) throw validation("task.delegatedBy.actor is required (provenance)");
+
+  // Idempotency (KTD4): a retried create with the same clientKey + payload returns the
+  // original task; a same-key-different-payload reuse throws conflict. `clientKey` is
+  // excluded from the fingerprint so it does not perturb its own hash.
+  let keyHash: string | undefined;
+  if (input.clientKey) {
+    const payload = { ...input };
+    delete payload.clientKey;
+    keyHash = payloadHash(payload);
+    const existingId = resolveCreationKey(store, actorId, input.clientKey, keyHash, "task");
+    if (existingId) {
+      const existing = store.getTask(existingId);
+      if (existing) return existing; // short-circuit: no second write, no demo re-sweep
+    }
+  }
+
   const now = store.nowIso();
   const id = newId("task");
   const waitingOn = input.waitingOn;
@@ -80,7 +100,13 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   store.writeObjects(
     [{ type: "task", obj: task as unknown as Record<string, unknown> }],
     [event(store, id, actorId, "created", { delegatedBy: input.delegatedBy })],
+    input.clientKey
+      ? (db) => store.putCreationKey(db, actorId, input.clientKey!, "task", id, keyHash!)
+      : undefined,
   );
+  // First real task created after a `hip demo` run sweeps the demo seed. Guarded on the
+  // demo flag so seeding's own task_create calls never trigger a recursive cleanup.
+  if (!input._meta?.demo) maybeCleanDemo(store);
   return task;
 }
 
@@ -212,7 +238,10 @@ export function orient(store: Store, id: string): TaskView | null {
   };
 }
 
-export function listTasks(store: Store, filter?: { status?: TaskStatus; tag?: string }): Task[] {
+export function listTasks(
+  store: Store,
+  filter?: { status?: TaskStatus; tag?: string; onActor?: string },
+): Task[] {
   return store.listTasks(filter);
 }
 

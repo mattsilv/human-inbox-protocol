@@ -178,8 +178,8 @@ export class Store {
       .map((f) => f.slice(0, -3));
   }
 
-  listTasks(filter?: { status?: TaskStatus; tag?: string }): Task[] {
-    // `tag` joins the task_tag index; `status` and `tag` AND-combine when both given.
+  listTasks(filter?: { status?: TaskStatus; tag?: string; onActor?: string }): Task[] {
+    // `tag` joins the task_tag index; `status`, `tag`, and `onActor` AND-combine.
     const from = filter?.tag
       ? `task_index ti JOIN task_tag tt ON tt.task_id = ti.id`
       : `task_index ti`;
@@ -192,6 +192,11 @@ export class Store {
     if (filter?.status) {
       conds.push("ti.status = ?");
       params.push(filter.status);
+    }
+    if (filter?.onActor) {
+      // waiting_on_actor is already indexed (idx_task_waiting_actor) — the filter is free.
+      conds.push("ti.waiting_on_actor = ?");
+      params.push(filter.onActor);
     }
     const where = conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
     const rows = this.db
@@ -349,6 +354,36 @@ export class Store {
       result: JSON.parse(r.result_json as string) as ReconcileResult,
       contentHash: r.content_hash as string,
     };
+  }
+
+  // ---- creation-key ledger (SQLite-authoritative, write-once idempotency) ----
+
+  /** The object a client-supplied (actorId, clientKey) already created, or null. */
+  getCreationKey(
+    actorId: string,
+    clientKey: string,
+  ): { objectType: string; objectId: string; contentHash: string } | null {
+    const r = this.db
+      .prepare(`SELECT object_type, object_id, content_hash FROM creation_keys WHERE actor_id = ? AND client_key = ?`)
+      .get(actorId, clientKey) as { object_type: string; object_id: string; content_hash: string } | undefined;
+    if (!r) return null;
+    return { objectType: r.object_type, objectId: r.object_id, contentHash: r.content_hash };
+  }
+
+  /** Record a creation key inside the caller's commit txn. INSERT OR IGNORE = retry-safe. */
+  putCreationKey(
+    db: Db,
+    actorId: string,
+    clientKey: string,
+    objectType: string,
+    objectId: string,
+    contentHash: string,
+  ): void {
+    db.prepare(
+      `INSERT OR IGNORE INTO creation_keys
+       (actor_id, client_key, object_type, object_id, content_hash, created_at)
+       VALUES (?,?,?,?,?,?)`,
+    ).run(actorId, clientKey, objectType, objectId, contentHash, this.nowIso());
   }
 
   putEnvelope(db: Db, env: InboundEnvelope, result: ReconcileResult): void {

@@ -4,6 +4,7 @@ import type { Execution, ExecutionStatus, Decision, HipEvent } from "../types.js
 import { validation, notFound, conflict } from "./errors.js";
 import { requireActor } from "./util.js";
 import { decisionEvent } from "./decisions.js";
+import { payloadHash, resolveCreationKey } from "./idempotency.js";
 
 export interface RegisterExecutionInput {
   task: string;
@@ -11,11 +12,28 @@ export interface RegisterExecutionInput {
   runtime?: { system: string; externalId?: string };
   status?: ExecutionStatus;
   expectedNextHeartbeatAt?: string;
+  /** Optional client idempotency key: a retried register with the same key returns the original execution. */
+  clientKey?: string;
 }
 
 export function registerExecution(store: Store, input: RegisterExecutionInput, actorId: string): Execution {
   requireActor(actorId);
   if (!store.getTask(input.task)) throw notFound(`task ${input.task} not found`);
+
+  // Idempotency (KTD4): a retried register with the same clientKey + payload returns the
+  // original execution; a same-key-different-payload reuse throws conflict.
+  let keyHash: string | undefined;
+  if (input.clientKey) {
+    const payload = { ...input };
+    delete payload.clientKey;
+    keyHash = payloadHash(payload);
+    const existingId = resolveCreationKey(store, actorId, input.clientKey, keyHash, "execution");
+    if (existingId) {
+      const existing = store.getExecution(existingId);
+      if (existing) return existing; // short-circuit: no second write
+    }
+  }
+
   const now = store.nowIso();
   const exe: Execution = {
     id: newId("execution"),
@@ -32,7 +50,10 @@ export function registerExecution(store: Store, input: RegisterExecutionInput, a
   store.commit({
     files: [],
     events: [execEvent(store, exe, actorId, "execution-registered")],
-    derive: (db) => store.upsertExecution(db, exe),
+    derive: (db) => {
+      store.upsertExecution(db, exe);
+      if (input.clientKey) store.putCreationKey(db, actorId, input.clientKey, "execution", exe.id, keyHash!);
+    },
   });
   return exe;
 }

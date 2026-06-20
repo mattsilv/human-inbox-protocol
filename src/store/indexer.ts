@@ -9,10 +9,11 @@ export function indexTask(db: Db, task: Task, hash: string): void {
   // Derive the flat index columns from the internal union (KTD4 lower-at-index).
   const status = task.state.kind;
   const waitingActor = task.state.kind === "waiting" ? task.state.onActor : null;
+  const isDemo = task._meta?.demo === true ? 1 : 0;
   db.prepare(
     `INSERT OR REPLACE INTO task_index
-     (id, title, status, next_action_on, waiting_on_actor, priority, content_hash, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+     (id, title, status, next_action_on, waiting_on_actor, priority, content_hash, created_at, updated_at, is_demo)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     task.id,
     task.title ?? null,
@@ -23,6 +24,7 @@ export function indexTask(db: Db, task: Task, hash: string): void {
     hash,
     task.createdAt ?? null,
     task.updatedAt ?? null,
+    isDemo,
   );
 
   db.prepare(`DELETE FROM task_reference WHERE task_id = ?`).run(task.id);

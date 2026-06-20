@@ -78,6 +78,9 @@ The flow that maps an inbound message to its place: attach it to the matching Ta
 The inbound message handed to Reconcile, carrying a caller-supplied stable id that is the idempotency key — submitting the same Envelope twice yields one reconcile and the original verdict.
 *Avoid:* InboundEnvelope.
 
+### Creation key
+A caller-supplied idempotency key (`clientKey`) on `task_create` and `execution_register`, recorded per-Actor in a write-once ledger mirroring the Envelope's. A retry with the same key and identical payload returns the original object; the same key with a different payload is rejected as a conflict (a client bug, surfaced not merged). Lets a remote agent on a flaky link retry a create safely. Omitting the key preserves non-idempotent creation.
+
 ### Event log
 The append-only record of state changes (creation, transitions, resolutions, nudges, reconciles), separate from the Thread. It is the audit trail and the learning substrate; it is never updated or deleted, only appended.
 

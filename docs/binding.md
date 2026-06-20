@@ -19,12 +19,23 @@ one to the other is a transport change, not a redesign.
   allowlist (loopback + the configured bind host); a mismatched `Host`/`Origin` is
   rejected with `403`.
 
-## Remote agents (Tailscale binding)
+## Topology: co-location (recommended) vs remote binding
 
-The daemon binds to whatever `HIP_HOST` names (`DEFAULT_HOST = 127.0.0.1`); the
-LaunchAgent plist carries it as an env var. To let an **off-box agent** reach the
-daemon — e.g. an agent on another machine driving HIP as a client — bind to the dev
-machine's **Tailscale** interface instead of loopback:
+**Co-location is the recommended topology.** Run the daemon on the **same box** as the
+client, bound to loopback; the client connects to `http://127.0.0.1:4319/mcp`. Nothing is
+exposed off-box, so the bearer token is paired with the loopback gate rather than standing
+alone, and there is no DNS-rebind allowlist to re-derive when a bind host moves. `hip
+install` sets up a per-user service for this automatically — a **systemd user service** on
+Linux (with `loginctl` linger so the daemon survives logout/boot on a headless box) and a
+**LaunchAgent** on macOS. This is the dogfood topology.
+
+### Remote binding (alternative — off-box agent over Tailscale)
+
+The daemon binds to whatever `HIP_HOST` names (`DEFAULT_HOST = 127.0.0.1`); the service
+unit carries it as an env var. To let an **off-box agent** reach the daemon — an agent on
+another machine driving HIP as a client — bind to the host machine's **Tailscale**
+interface instead of loopback. This path still works but is no longer the dogfood
+topology, and it makes the bearer token the only network gate (see Security below):
 
 ```
 HIP_HOST=<this-machine-tailscale-ip>   # in the LaunchAgent plist env, then reload
@@ -35,11 +46,11 @@ The agent points at `http://<this-machine-tailscale-ip>:4319/mcp` with the same
 MagicDNS name only works if `HIP_HOST` is set to that exact name, since the `Host`
 header must match the allowlisted bind host.
 
-Use the CLI rather than hand-editing the plist — `HIP_HOST`, the `config.json` url, and
-the daemon's DNS-rebinding allowlist must all agree, and the allowlist is re-derived only
-when the daemon restarts:
+Use the CLI rather than hand-editing the service unit — `HIP_HOST`, the `config.json` url,
+and the daemon's DNS-rebinding allowlist must all agree, and the allowlist is re-derived
+only when the daemon restarts:
 
-- **`hip rebind <host>`** — atomically rewrites the plist host and `config.json` url,
+- **`hip rebind <host>`** — atomically rewrites the unit host and `config.json` url,
   reloads the daemon, then verifies the *remote* path (an authenticated POST whose `Host`
   is the new bind host). On failure it rolls back to the previous host. This is the safe
   way to move a running daemon on or off loopback.
@@ -76,12 +87,23 @@ object or `{ items }` wrapper) with a human-readable `text` content block as a m
 Domain errors return `{ isError: true, structuredContent: { error: { code, message } } }`
 where `code ∈ {validation, not_found, conflict, state, internal}`.
 
-## Retry / idempotency caveat
+## Retry / idempotency
 
-Mutating tools are **not idempotent** in the MVP **except** `reconcile_submit`, whose
-`InboundEnvelope.id` is an idempotency key (write-once ledger; resubmission returns the
-original verdict). All other creates can duplicate on retry. The v2-era fix is
-client-supplied creation ids; reserved, not implemented.
+Three creates are retry-safe; the rest are not.
+
+- **`reconcile_submit`** — idempotent on `InboundEnvelope.id` (write-once envelope ledger;
+  resubmission returns the original verdict).
+- **`task_create` and `execution_register`** — accept an optional **`clientKey`**. A retry
+  with the same `clientKey` **and the same payload** returns the original object (no
+  duplicate); the same `clientKey` with a **different** payload returns `conflict` (a
+  client bug, surfaced rather than silently merged). Omitting `clientKey` preserves the
+  non-idempotent behavior. Keys are **per-actor** and recorded in a write-once
+  `creation_keys` ledger mirroring the envelope ledger. Derive the key deterministically
+  from the work (never random) so a genuine retry reuses it.
+
+A remote agent on a flaky link should pass a `clientKey` on these creates so a
+retried-after-uncertain-success call cannot duplicate. All other mutating tools remain
+non-idempotent in the MVP.
 
 ## Tool surface (v1, shipped)
 
@@ -91,11 +113,11 @@ documentation only.
 
 | HIP primitive | Tool(s) |
 |---|---|
-| Task | `task_create`, `task_read` (orient-first), `task_update` (content only), `task_list` |
+| Task | `task_create` (optional `clientKey`), `task_read` (orient-first), `task_update` (content only), `task_list` (filters: `status`, `tag`, `onActor` — AND-combined) |
 | Transitions | `task_wait`, `task_done`, `task_drop`, `task_block(taskId, executionId, reason)` |
 | Decision | `decision_create`, `decision_list`, `decision_get`, `decision_resolve`, `decision_snooze` |
 | Reconcile | `reconcile_submit` (InboundEnvelope → ReconcileResult; synchronous, deterministic) |
-| Execution | `execution_register`, `execution_get`, `execution_heartbeat` |
+| Execution | `execution_register` (optional `clientKey`), `execution_get`, `execution_heartbeat` |
 | Context | `actor_create`, `entity_create` (minimal — full CRUD deferred) |
 | History | `event_list` |
 
@@ -159,9 +181,10 @@ fixes.
 
 ## Doctor scopes (CLI vs MCP)
 
-`hip doctor` (CLI) runs **store consistency plus network/bind-reality** checks — plist↔
-config host mismatch, unsafe bind, and dist staleness — because those need config/plist/
-filesystem context. The `doctor_run` MCP tool is **store-scoped only** (it marks its
+`hip doctor` (CLI) runs **store consistency plus network/bind-reality** checks — service
+unit↔config host mismatch, unsafe bind, systemd linger (Linux), and dist staleness —
+because those need config/unit/filesystem context. The `doctor_run` MCP tool is
+**store-scoped only** (it marks its
 result `scope: store-only`); an agent calling it over MCP will not see bind-reality
 issues. Diagnose host-mismatch, bind safety, and staleness from the CLI.
 
