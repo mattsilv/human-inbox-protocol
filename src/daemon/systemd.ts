@@ -83,10 +83,12 @@ WantedBy=default.target
     // linger first so the user manager persists; then pick up the new unit and start it.
     const linger = this.run("loginctl", ["enable-linger", this.user]);
     this.run("systemctl", ["--user", "daemon-reload"]);
-    this.run("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT]);
+    const start = this.run("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT]);
     return [
       `  systemd unit: ${target}`,
-      `  enabled:      systemctl --user enable --now ${SYSTEMD_UNIT}`,
+      start.status === 0
+        ? `  enabled:      systemctl --user enable --now ${SYSTEMD_UNIT}`
+        : `  enabled:      FAILED — \`systemctl --user enable --now ${SYSTEMD_UNIT}\` exited non-zero; check \`systemctl --user status ${SYSTEMD_UNIT}\``,
       linger.status === 0
         ? `  linger:       enabled for ${this.user} (survives logout/boot)`
         : `  linger:       could NOT enable for ${this.user} — run \`loginctl enable-linger ${this.user}\` so the daemon survives logout`,

@@ -87,6 +87,12 @@ describe("SystemdManager (U2)", () => {
     expect(lines.join("\n")).toMatch(/could NOT enable/);
   });
 
+  it("reports a FAILED start (enable --now non-zero) instead of claiming success", () => {
+    const rec = recorder({ "enable --now": { status: 1, stdout: "" } });
+    const lines = new SystemdManager(rec.run).writeUnit("[Service]\n");
+    expect(lines.join("\n")).toMatch(/enabled:\s+FAILED/);
+  });
+
   it("reload runs daemon-reload then restart when active", () => {
     const rec = recorder({ "is-active": { status: 0, stdout: "active\n" } });
     const mgr = new SystemdManager(rec.run);
