@@ -18,6 +18,12 @@ export function registerExecutionTools(server: McpServer, { domain }: ToolDeps):
           .enum(["submitted", "working", "completed", "failed", "canceled"])
           .optional(),
         expectedNextHeartbeatAt: z.string().optional(),
+        clientKey: z
+          .string()
+          .optional()
+          .describe(
+            "Idempotency key: retrying execution_register with the same key + payload returns the original execution instead of duplicating. Same key, different payload → conflict.",
+          ),
       },
     },
     async (a) =>
@@ -32,6 +38,7 @@ export function registerExecutionTools(server: McpServer, { domain }: ToolDeps):
               ...(a.expectedNextHeartbeatAt
                 ? { expectedNextHeartbeatAt: a.expectedNextHeartbeatAt }
                 : {}),
+              ...(a.clientKey ? { clientKey: a.clientKey } : {}),
             },
             a.actorId,
           ),

@@ -26,6 +26,12 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
         references: z.array(zReference).optional(),
         tags: z.array(z.string()).optional().describe('Flat labels, e.g. ["protocol-gap"] for a dogfood gap'),
         waitingOn: zWaiting.optional(),
+        clientKey: z
+          .string()
+          .optional()
+          .describe(
+            "Idempotency key: retrying task_create with the same key + payload returns the original task instead of duplicating (safe over a flaky link). Same key, different payload → conflict.",
+          ),
         demoSeed: z
           .boolean()
           .optional()
@@ -49,6 +55,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
             ...(a.references ? { references: a.references as Reference[] } : {}),
             ...(a.tags ? { tags: a.tags } : {}),
             ...(a.waitingOn ? { waitingOn: a.waitingOn } : {}),
+            ...(a.clientKey ? { clientKey: a.clientKey } : {}),
             ...(a.demoSeed ? { _meta: { demo: true } } : {}),
           },
           a.actorId,

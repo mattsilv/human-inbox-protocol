@@ -351,6 +351,36 @@ export class Store {
     };
   }
 
+  // ---- creation-key ledger (SQLite-authoritative, write-once idempotency) ----
+
+  /** The object a client-supplied (actorId, clientKey) already created, or null. */
+  getCreationKey(
+    actorId: string,
+    clientKey: string,
+  ): { objectType: string; objectId: string; contentHash: string } | null {
+    const r = this.db
+      .prepare(`SELECT object_type, object_id, content_hash FROM creation_keys WHERE actor_id = ? AND client_key = ?`)
+      .get(actorId, clientKey) as { object_type: string; object_id: string; content_hash: string } | undefined;
+    if (!r) return null;
+    return { objectType: r.object_type, objectId: r.object_id, contentHash: r.content_hash };
+  }
+
+  /** Record a creation key inside the caller's commit txn. INSERT OR IGNORE = retry-safe. */
+  putCreationKey(
+    db: Db,
+    actorId: string,
+    clientKey: string,
+    objectType: string,
+    objectId: string,
+    contentHash: string,
+  ): void {
+    db.prepare(
+      `INSERT OR IGNORE INTO creation_keys
+       (actor_id, client_key, object_type, object_id, content_hash, created_at)
+       VALUES (?,?,?,?,?,?)`,
+    ).run(actorId, clientKey, objectType, objectId, contentHash, this.nowIso());
+  }
+
   putEnvelope(db: Db, env: InboundEnvelope, result: ReconcileResult): void {
     db.prepare(
       `INSERT OR IGNORE INTO envelopes

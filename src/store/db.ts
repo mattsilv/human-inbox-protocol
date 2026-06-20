@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { ensureDir } from "./atomic.js";
 import { dirname } from "node:path";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // Tables rebuilt from files by `reindex`. Everything here is a cache of file truth.
 const DERIVED_TABLES = [
@@ -135,6 +135,19 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 CREATE INDEX IF NOT EXISTS idx_exec_task ON executions(task_id);
 CREATE INDEX IF NOT EXISTS idx_exec_blocked ON executions(blocked_on);
+
+-- AUTHORITATIVE: client-supplied idempotency keys for task_create / execution_register.
+-- Write-once, keyed (actor_id, client_key); mirrors the envelopes ledger so a remote
+-- agent on a flaky link can retry a create without duplicating. Not rebuilt by reindex.
+CREATE TABLE IF NOT EXISTS creation_keys (
+  actor_id TEXT NOT NULL,
+  client_key TEXT NOT NULL,
+  object_type TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (actor_id, client_key)
+);
 `;
 
 export type Db = Database.Database;
@@ -146,9 +159,10 @@ export function openDb(dbFile: string): Db {
   db.pragma("synchronous = NORMAL");
   db.pragma("busy_timeout = 5000");
   // SCHEMA is all `IF NOT EXISTS`, so it brings any older DB up to the current table
-  // set on open (e.g. task_tag for a v1 store). The version pragma is bookkeeping:
-  // a fresh DB (0) and any pre-HEAD DB both advance to SCHEMA_VERSION; an existing
-  // v1 store keeps its rows — the migration is additive (new table only).
+  // set on open (e.g. task_tag for a v1 store, creation_keys for a v3 store). The
+  // version pragma is bookkeeping: a fresh DB (0) and any pre-HEAD DB both advance to
+  // SCHEMA_VERSION; an existing store keeps its rows — additive migrations (new tables
+  // only: task_tag at v?, creation_keys at v4) need no ALTER.
   db.exec(SCHEMA);
   const current = db.pragma("user_version", { simple: true }) as number;
   // v3: is_demo on task_index. A fresh DB (0) already has the column from SCHEMA, so

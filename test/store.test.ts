@@ -225,7 +225,7 @@ describe("store layer (U2)", () => {
   });
 });
 
-describe("schema migration (task_tag, is_demo)", () => {
+describe("schema migration (task_tag, is_demo, creation_keys)", () => {
   it("upgrades a v1 DB: creates task_tag, adds is_demo, bumps user_version, preserves rows", () => {
     const root = tmpRoot();
     const dbFile = join(root, "hip.db");
@@ -240,12 +240,17 @@ describe("schema migration (task_tag, is_demo)", () => {
     raw.close();
 
     const db = openDb(dbFile);
-    expect(SCHEMA_VERSION).toBe(3);
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(SCHEMA_VERSION).toBe(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     const tbl = db
       .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_tag'`)
       .get();
     expect(tbl).toBeTruthy();
+    // v4 adds the creation_keys ledger (new table only, additive — no ALTER).
+    const ck = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='creation_keys'`)
+      .get();
+    expect(ck).toBeTruthy();
     // is_demo added by the v3 ALTER; the pre-existing row defaults to 0.
     const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
     expect(cols.some((c) => c.name === "is_demo")).toBe(true);
@@ -263,10 +268,10 @@ describe("schema migration (task_tag, is_demo)", () => {
     // Fresh DB gets is_demo from SCHEMA; reopening must not re-run ALTER (would throw
     // "duplicate column name") — the table_info guard handles this.
     const db1 = openDb(dbFile);
-    expect(db1.pragma("user_version", { simple: true })).toBe(3);
+    expect(db1.pragma("user_version", { simple: true })).toBe(4);
     db1.close();
     const db2 = openDb(dbFile);
-    expect(db2.pragma("user_version", { simple: true })).toBe(3);
+    expect(db2.pragma("user_version", { simple: true })).toBe(4);
     db2.close();
     cleanup(root);
   });
@@ -286,7 +291,7 @@ describe("schema migration (task_tag, is_demo)", () => {
     raw.close();
 
     const db = openDb(dbFile);
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
     expect(cols.some((c) => c.name === "is_demo")).toBe(true);
     expect(db.prepare(`SELECT is_demo FROM task_index WHERE id='tsk_v2'`).get()).toEqual({
