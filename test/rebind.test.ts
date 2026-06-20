@@ -4,9 +4,13 @@ import { createServer as createHttpServer, type Server } from "node:http";
 import { HipDaemon } from "../src/daemon/server.js";
 import { rebind, remoteVerify, install } from "../src/cli/lifecycle.js";
 import { configPath, tokenPath } from "../src/cli/config.js";
-import { plistPath } from "../src/daemon/launchd.js";
+import { plistPath, LaunchdManager } from "../src/daemon/launchd.js";
 import { Store } from "../src/store/index.js";
 import { tmpRoot, cleanup, freePort } from "./helpers.js";
+
+// These tests assert launchd plist specifics; pin the launchd manager so they are
+// deterministic on any CI host (on Linux, selectServiceManager() would pick systemd).
+const ld = new LaunchdManager();
 
 /** Start a stub HTTP server whose handler is supplied per call; returns its url + closer. */
 async function stubServer(handler: Parameters<typeof createHttpServer>[1]): Promise<{ url: string; close: () => Promise<void>; server: Server }> {
@@ -105,7 +109,7 @@ describe("rebind (U3) — transactional file rewrite", () => {
     process.env.HIP_PORT = "4319";
     process.env.HOME = fakeHome;
     delete process.env.HIP_HOST;
-    install({}); // writes config + plist (into fakeHome)
+    install({ manager: ld }); // writes config + plist (into fakeHome)
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(saved)) {
@@ -117,7 +121,7 @@ describe("rebind (U3) — transactional file rewrite", () => {
     cleanup(fakeHome);
   });
 
-  const okDeps = { reload: () => true, verify: async () => "ok" as const };
+  const okDeps = { reload: () => true, verify: async () => "ok" as const, manager: ld };
 
   it("rewrites config url and plist HIP_HOST in one call and preserves the token (0600)", async () => {
     const tokenBefore = readFileSync(tokenPath(), "utf8");
@@ -160,7 +164,7 @@ describe("rebind (U3) — transactional file rewrite", () => {
     const plistBefore = readFileSync(plistPath(), "utf8");
     let reloads = 0;
     await expect(
-      rebind("100.64.0.1", { reload: () => (reloads++, true), verify: async () => "forbidden" }),
+      rebind("100.64.0.1", { reload: () => (reloads++, true), verify: async () => "forbidden", manager: ld }),
     ).rejects.toThrow(/rolled back/i);
     expect(readFileSync(configPath(), "utf8")).toBe(cfgBefore);
     expect(readFileSync(plistPath(), "utf8")).toBe(plistBefore);
@@ -172,7 +176,7 @@ describe("rebind (U3) — transactional file rewrite", () => {
     const plistBefore = readFileSync(plistPath(), "utf8");
     let reloads = 0;
     await expect(
-      rebind("100.64.0.1", { reload: () => (reloads++, true), verify: async () => "unreachable" }),
+      rebind("100.64.0.1", { reload: () => (reloads++, true), verify: async () => "unreachable", manager: ld }),
     ).rejects.toThrow(/did not come back|still restarting/i);
     expect(readFileSync(configPath(), "utf8")).toBe(cfgBefore);
     expect(readFileSync(plistPath(), "utf8")).toBe(plistBefore);
@@ -188,6 +192,7 @@ describe("rebind (U3) — transactional file rewrite", () => {
           throw new Error("launchctl reload failed");
         },
         verify: async () => "ok",
+        manager: ld,
       }),
     ).rejects.toThrow(/launchctl reload failed[\s\S]*Rolled back/i);
     expect(readFileSync(configPath(), "utf8")).toBe(cfgBefore);
@@ -208,6 +213,7 @@ describe("rebind (U3) — transactional file rewrite", () => {
     const out = await rebind("100.64.0.1", {
       reload: () => false,
       verify: async () => ((verified = true), "ok"),
+      manager: ld,
     });
     expect(verified).toBe(false);
     expect(out).toMatch(/restart your `hip serve`/);

@@ -98,6 +98,8 @@ export interface InstallOptions {
   writePlist?: boolean;
   /** Bind host override; falls back to HIP_HOST/DEFAULT_HOST. Routed through `hostPort`. */
   host?: string;
+  /** Service manager. Injectable for tests; defaults to the platform manager. */
+  manager?: ServiceManager;
 }
 
 export function install(opts: InstallOptions = {}): string {
@@ -131,7 +133,7 @@ export function install(opts: InstallOptions = {}): string {
   ];
 
   if (opts.writePlist !== false) {
-    const mgr = selectServiceManager();
+    const mgr = opts.manager ?? selectServiceManager();
     const unit = mgr.buildUnit({
       nodePath: process.execPath,
       scriptPath: process.argv[1] ?? "hip",
