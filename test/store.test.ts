@@ -79,6 +79,27 @@ describe("store layer (U2)", () => {
     expect(store.listTasks({ status: "done" })).toHaveLength(1);
   });
 
+  it("listTasks onActor filters to tasks waiting on that actor, AND-combining with status (U4)", () => {
+    const waitOpts = (onActor: string) => ({
+      state: { kind: "waiting" as const, onActor, since: "2026-06-09", cadence: null, lastNudge: null },
+    });
+    const owned = makeTask(store, { title: "waiting on owner", ...waitOpts("act_owner") });
+    makeTask(store, { title: "waiting on alex", ...waitOpts("act_alex") });
+    makeTask(store, { title: "plain open" }); // no waiting_on_actor
+
+    const onOwner = store.listTasks({ onActor: "act_owner" });
+    expect(onOwner.map((t) => t.id)).toEqual([owned.id]);
+
+    // status + onActor AND-combine.
+    expect(store.listTasks({ status: "waiting", onActor: "act_owner" }).map((t) => t.id)).toEqual([owned.id]);
+    // a non-waiting task never matches an onActor filter.
+    expect(store.listTasks({ status: "open", onActor: "act_owner" })).toHaveLength(0);
+    // no match → empty, not error.
+    expect(store.listTasks({ onActor: "act_nobody" })).toHaveLength(0);
+    // no filter → unchanged (all three).
+    expect(store.listTasks()).toHaveLength(3);
+  });
+
   it("doctor flags an index row with no file and an unindexed file", () => {
     const t = makeTask(store);
     // Delete the file but leave the index row → index-orphan.

@@ -113,6 +113,27 @@ describe("MCP daemon + tool binding (U4)", () => {
     }
   });
 
+  it("task_list onActor returns the real 'waiting on actor X' query the client needs (U4)", async () => {
+    const mk = (title: string, onActor: string) =>
+      client.callOk("task_create", {
+        actorId: MATT,
+        title,
+        delegatedBy: { actor: MATT, role: "creator" },
+        waitingOn: { onActor, since: "2026-06-09" },
+      });
+    const owner = (await mk("waiting on owner", "act_owner")) as { id: string };
+    await mk("waiting on alex", "act_alex");
+    await client.callOk("task_create", { actorId: MATT, title: "open task", delegatedBy: { actor: MATT, role: "creator" } });
+
+    const onOwner = await client.callOk("task_list", { status: "waiting", onActor: "act_owner" });
+    const ids = (onOwner.tasks as { id: string }[]).map((t) => t.id);
+    expect(ids).toEqual([owner.id]);
+
+    // No match → empty, not error.
+    const none = await client.callOk("task_list", { onActor: "act_nobody" });
+    expect((none.tasks as unknown[]).length).toBe(0);
+  });
+
   it("AE6: task_block files a decision, blocks the execution, resolve resumes it", async () => {
     const t = (await client.callOk("task_create", {
       actorId: MATT,

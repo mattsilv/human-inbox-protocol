@@ -238,7 +238,10 @@ export function orient(store: Store, id: string): TaskView | null {
   };
 }
 
-export function listTasks(store: Store, filter?: { status?: TaskStatus; tag?: string }): Task[] {
+export function listTasks(
+  store: Store,
+  filter?: { status?: TaskStatus; tag?: string; onActor?: string },
+): Task[] {
   return store.listTasks(filter);
 }
 

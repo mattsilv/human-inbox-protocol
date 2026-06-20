@@ -178,8 +178,8 @@ export class Store {
       .map((f) => f.slice(0, -3));
   }
 
-  listTasks(filter?: { status?: TaskStatus; tag?: string }): Task[] {
-    // `tag` joins the task_tag index; `status` and `tag` AND-combine when both given.
+  listTasks(filter?: { status?: TaskStatus; tag?: string; onActor?: string }): Task[] {
+    // `tag` joins the task_tag index; `status`, `tag`, and `onActor` AND-combine.
     const from = filter?.tag
       ? `task_index ti JOIN task_tag tt ON tt.task_id = ti.id`
       : `task_index ti`;
@@ -192,6 +192,11 @@ export class Store {
     if (filter?.status) {
       conds.push("ti.status = ?");
       params.push(filter.status);
+    }
+    if (filter?.onActor) {
+      // waiting_on_actor is already indexed (idx_task_waiting_actor) — the filter is free.
+      conds.push("ti.waiting_on_actor = ?");
+      params.push(filter.onActor);
     }
     const where = conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
     const rows = this.db

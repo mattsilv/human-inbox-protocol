@@ -96,15 +96,23 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
     "task_list",
     {
       title: "List tasks",
-      description: "All tasks, optionally filtered by status and/or tag (AND-combined).",
+      description: "All tasks, optionally filtered by status, tag, and/or onActor (AND-combined).",
       inputSchema: {
         status: z.enum(["open", "waiting", "done", "dropped"]).optional(),
         tag: z.string().optional().describe('Filter by a tag, e.g. "protocol-gap"'),
+        onActor: z
+          .string()
+          .optional()
+          .describe('Actor a task is waiting on, e.g. task_list { status:"waiting", onActor:"act_owner" }'),
       },
     },
     async (a) =>
       guard(() => {
-        const filter = { ...(a.status ? { status: a.status } : {}), ...(a.tag ? { tag: a.tag } : {}) };
+        const filter = {
+          ...(a.status ? { status: a.status } : {}),
+          ...(a.tag ? { tag: a.tag } : {}),
+          ...(a.onActor ? { onActor: a.onActor } : {}),
+        };
         const tasks = domain.listTasks(Object.keys(filter).length ? filter : undefined).map(wire);
         return ok({ tasks });
       }),
