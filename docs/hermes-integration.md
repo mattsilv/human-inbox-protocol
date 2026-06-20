@@ -6,17 +6,23 @@ in the Hermes repo; this document is the contract.
 
 ## Connection
 
-After `hip install`, read the connection config:
+The daemon is **co-located** with Hermes — same box, bound to loopback. After `hip
+install` (a systemd user service on Linux, a LaunchAgent on macOS), read the connection
+config:
 
 ```
-url      = http://127.0.0.1:4319/mcp
+url      = http://127.0.0.1:4319/mcp     # loopback; daemon runs on the same host
 bearer   = $(cat ~/.config/hip/token)
-actorId  = act_owner        # Matt; Hermes also has its own agent actor, e.g. act_hermes
+actorId  = act_owner        # the human owner; Hermes also has its own agent actor
 ```
 
 Connect as a Streamable-HTTP MCP client with `Authorization: Bearer <token>`. The
 transport is stateless — no session to manage. Use the thin client wrapper in
 `src/client.ts` as a reference (it's what the CLI and the smoke script both use).
+
+Co-location is the recommended topology: no off-box exposure, no Tailscale allowlist to
+keep in sync. The remote-bind path (daemon on another box, reached over Tailscale) still
+works but is not the default — see `binding.md` § Topology.
 
 Every write carries an explicit `actorId`; `task_block` and `execution_*` carry an
 explicit `executionId`. Identity is never inferred from the connection.
@@ -75,15 +81,34 @@ task_block { actorId, taskId, executionId, reason: "<the question>" }
 execution_get { id: executionId }   # repeat until blockedOn === null
 ```
 
-When Matt answers the decision (via `hip inbox` or any client), `blockedOn` clears and
-the execution returns to `working` — that's the resume signal. Polling is the only
+When the owner answers the decision (via `hip inbox` or any client), `blockedOn` clears
+and the execution returns to `working` — that's the resume signal. Polling is the only
 resolution channel; the daemon sends no server-initiated messages.
+
+## Querying state (the digest)
+
+To build a digest of what's outstanding, use the **real** query contract — these are the
+filters the daemon actually exposes, not invented ones:
+
+```
+task_list { status: "waiting", onActor: "<actor id>" }   # tasks waiting on a given actor
+decision_list                                            # pending decisions in the inbox
+```
+
+`task_list` AND-combines `status`, `tag`, and `onActor` server-side. There is **no**
+`{ waitingOn }` or `{ status: "blocked" }` query — a blocked *execution* is observed via
+`execution_get` (F3), and "waiting on actor X" is `task_list { status: "waiting", onActor }`.
 
 ## Idempotency & retries
 
-Only `reconcile_submit` is idempotent (on `envelope.id`). Other creates can duplicate on
-retry — Hermes should not blindly retry a `task_create` that may have succeeded. The
-v2-era fix is client-supplied creation ids; not yet implemented.
+- `reconcile_submit` is idempotent on `envelope.id`.
+- `task_create` and `execution_register` accept an optional **`clientKey`**: a retry with
+  the same key **and payload** returns the original object; the same key with a different
+  payload returns `conflict`. On a flaky link, pass a deterministic `clientKey` (never
+  random) so a retried-after-uncertain-success create cannot duplicate.
+
+All other mutating tools are not idempotent — do not blindly retry them. See `binding.md`
+§ Retry / idempotency for the full contract.
 
 ## Known-good baseline: the smoke script
 
