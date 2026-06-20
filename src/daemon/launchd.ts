@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { atomicWrite, readIfExists } from "../store/index.js";
+import { readIfExists } from "../store/index.js";
 import type { ServiceManager, UnitOptions } from "./service-manager.js";
 
 export const LAUNCHD_LABEL = "ai.hip.daemon";
@@ -93,11 +93,11 @@ export class LaunchdManager implements ServiceManager {
     return buildPlist(opts);
   }
 
-  /** Write the plist atomically (load stays a manual `launchctl load` step, as before). */
+  /** Write the plist (load stays a manual `launchctl load` step, as before). */
   writeUnit(unitText: string): string[] {
     const target = plistPath();
     mkdirSync(dirname(target), { recursive: true });
-    atomicWrite(target, unitText);
+    writeFileSync(target, unitText);
     return [`  LaunchAgent: ${target}`, `  load it:    launchctl load ${target}`];
   }
 

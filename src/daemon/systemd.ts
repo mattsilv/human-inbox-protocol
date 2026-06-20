@@ -1,8 +1,8 @@
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { atomicWrite, readIfExists } from "../store/index.js";
+import { readIfExists } from "../store/index.js";
 import type { ServiceManager, UnitOptions } from "./service-manager.js";
 import type { DoctorIssue } from "../store/index.js";
 
@@ -80,7 +80,7 @@ WantedBy=default.target
   writeUnit(unitText: string): string[] {
     const target = this.unitPath();
     mkdirSync(dirname(target), { recursive: true });
-    atomicWrite(target, unitText);
+    writeFileSync(target, unitText);
     // linger first so the user manager persists; then pick up the new unit and start it.
     const linger = this.run("loginctl", ["enable-linger", this.user]);
     this.run("systemctl", ["--user", "daemon-reload"]);
