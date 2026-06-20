@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { bindRealityChecks, rebind, install } from "../src/cli/lifecycle.js";
 import { loadConfig, writeConfig } from "../src/cli/config.js";
 import { buildPlist, plistPath } from "../src/daemon/launchd.js";
+import { SystemdManager, type RunResult } from "../src/daemon/systemd.js";
 import { tmpRoot, cleanup } from "./helpers.js";
 
 describe("bindRealityChecks (U5)", () => {
@@ -100,5 +101,45 @@ describe("bindRealityChecks (U5)", () => {
     );
     const issue = bindRealityChecks().find((i) => i.code === "launchd-node-missing");
     expect(issue?.severity).toBe("error");
+  });
+
+  // Doctor on linux routes unit introspection through the injected systemd manager: it
+  // reports systemd linger state instead of any launchd-specific message, and a loopback
+  // co-located install (matching host) raises no bind/host errors. (KTD3 / U2)
+  it("reports the systemd linger warning when running under a systemd manager", () => {
+    const xdg = tmpRoot();
+    const savedXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.USER = "ash";
+    try {
+      const run = (cmd: string, args: string[]): RunResult => {
+        const key = `${cmd} ${args.join(" ")}`;
+        if (key.includes("show-user")) return { status: 0, stdout: "Linger=no\n" };
+        return { status: 0, stdout: "" };
+      };
+      const mgr = new SystemdManager(run);
+      // install-time unit, loopback host matching the config url (no host-mismatch),
+      // node = a real binary (no node-missing).
+      mgr.writeUnit(
+        mgr.buildUnit({
+          nodePath: process.execPath,
+          scriptPath: "/opt/hip/cli.js",
+          dataDir: "/x",
+          configDir: "/x",
+          host: "127.0.0.1",
+          port: 4319,
+          logDir: "/x",
+        }),
+      );
+      const issues = bindRealityChecks(mgr);
+      const linger = issues.find((i) => i.code === "linger-disabled");
+      expect(linger?.severity).toBe("warn");
+      expect(issues.find((i) => i.code === "host-mismatch")).toBeUndefined();
+      expect(issues.find((i) => i.code === "launchd-node-missing")).toBeUndefined();
+    } finally {
+      if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = savedXdg;
+      cleanup(xdg);
+    }
   });
 });

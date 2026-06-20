@@ -213,7 +213,7 @@ function hostFromUrl(url: string): string | null {
  * Returns no issues when not installed. Unit introspection is routed through the active
  * service manager (launchd plist / systemd unit).
  */
-export function bindRealityChecks(): DoctorIssue[] {
+export function bindRealityChecks(mgr: ServiceManager = selectServiceManager()): DoctorIssue[] {
   const issues: DoctorIssue[] = [];
   let cfg;
   try {
@@ -222,7 +222,6 @@ export function bindRealityChecks(): DoctorIssue[] {
     return issues; // not installed — nothing to check
   }
 
-  const mgr = selectServiceManager();
   const cfgHost = hostFromUrl(cfg.url);
   const unitHost = mgr.readUnitHost();
 
@@ -263,6 +262,9 @@ export function bindRealityChecks(): DoctorIssue[] {
       message: `${mgr.name} node binary ${nodePath} is missing — the daemon will not restart (likely removed by a Homebrew upgrade). Point the unit at a pinned runtime (e.g. \`node@26\`) and reload.`,
     });
   }
+
+  // Manager-specific checks (systemd: linger on a headless box). Launchd contributes none.
+  issues.push(...mgr.extraChecks());
 
   const stale = checkDistStaleness();
   if (stale) issues.push(stale);

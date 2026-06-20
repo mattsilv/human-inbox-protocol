@@ -1,4 +1,6 @@
 import { LaunchdManager } from "./launchd.js";
+import { SystemdManager } from "./systemd.js";
+import type { DoctorIssue } from "../store/index.js";
 
 /**
  * Options for rendering a per-user service unit (launchd plist / systemd unit). The
@@ -38,14 +40,15 @@ export interface ServiceManager {
   readUnitHost(): string | null;
   /** Node binary the installed unit will exec, or null when not installed. */
   readUnitNodePath(): string | null;
+  /** Manager-specific doctor checks (launchd: none; systemd: linger). Empty when not installed. */
+  extraChecks(): DoctorIssue[];
 }
 
 /**
- * Platform-select the service manager. Linux → systemd-user (wired in U2); every other
- * platform → launchd. This is the only `process.platform` branch in the codebase.
+ * Platform-select the service manager. Linux → systemd-user; every other platform →
+ * launchd. This is the only `process.platform` branch in the codebase.
  */
 export function selectServiceManager(platform: NodeJS.Platform = process.platform): ServiceManager {
-  // The linux → SystemdManager branch lands in U2; until then every platform uses launchd.
-  if (platform === "linux") return new LaunchdManager();
+  if (platform === "linux") return new SystemdManager();
   return new LaunchdManager();
 }

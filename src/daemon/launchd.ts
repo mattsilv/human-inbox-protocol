@@ -151,4 +151,9 @@ export class LaunchdManager implements ServiceManager {
     const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
     return m ? m[1]! : null;
   }
+
+  /** launchd has no per-user linger concern; no extra doctor checks. */
+  extraChecks(): never[] {
+    return [];
+  }
 }
