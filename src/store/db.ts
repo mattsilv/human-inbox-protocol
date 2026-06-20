@@ -161,8 +161,8 @@ export function openDb(dbFile: string): Db {
   // SCHEMA is all `IF NOT EXISTS`, so it brings any older DB up to the current table
   // set on open (e.g. task_tag for a v1 store, creation_keys for a v3 store). The
   // version pragma is bookkeeping: a fresh DB (0) and any pre-HEAD DB both advance to
-  // SCHEMA_VERSION; an existing store keeps its rows — additive migrations (new tables
-  // only: task_tag at v?, creation_keys at v4) need no ALTER.
+  // SCHEMA_VERSION; an existing store keeps its rows — additive migrations that only add
+  // a new table (e.g. creation_keys at v4) need no ALTER, just the IF NOT EXISTS create.
   db.exec(SCHEMA);
   const current = db.pragma("user_version", { simple: true }) as number;
   // v3: is_demo on task_index. A fresh DB (0) already has the column from SCHEMA, so

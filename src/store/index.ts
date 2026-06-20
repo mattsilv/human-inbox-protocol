@@ -2,7 +2,7 @@ export { Store, systemClock, type Clock, type FileWrite, type CommitParams } fro
 export { reindex, doctor, type ReindexReport, type DoctorReport, type DoctorIssue } from "./reindex.js";
 export { dataPaths, defaultDataRoot, filePath, type DataPaths } from "./paths.js";
 export { newId, isId, idPrefix } from "./ids.js";
-export { contentHash, atomicWrite } from "./atomic.js";
+export { contentHash, atomicWrite, readIfExists } from "./atomic.js";
 export { parseDuration, addDuration } from "./duration.js";
 export { EventLog } from "./events.js";
 export { openDb, SCHEMA_VERSION } from "./db.js";

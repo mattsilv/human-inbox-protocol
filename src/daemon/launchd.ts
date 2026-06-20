@@ -1,7 +1,8 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { atomicWrite, readIfExists } from "../store/index.js";
 import type { ServiceManager, UnitOptions } from "./service-manager.js";
 
 export const LAUNCHD_LABEL = "ai.hip.daemon";
@@ -92,11 +93,11 @@ export class LaunchdManager implements ServiceManager {
     return buildPlist(opts);
   }
 
-  /** Write the plist (load stays a manual `launchctl load` step, as before). */
+  /** Write the plist atomically (load stays a manual `launchctl load` step, as before). */
   writeUnit(unitText: string): string[] {
     const target = plistPath();
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, unitText);
+    atomicWrite(target, unitText);
     return [`  LaunchAgent: ${target}`, `  load it:    launchctl load ${target}`];
   }
 
@@ -138,17 +139,17 @@ export class LaunchdManager implements ServiceManager {
 
   /** The HIP_HOST declared in the installed plist, or null if no plist / no key. */
   readUnitHost(): string | null {
-    const target = plistPath();
-    if (!existsSync(target)) return null;
-    const m = /<key>HIP_HOST<\/key>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
+    const text = readIfExists(plistPath());
+    if (text === null) return null;
+    const m = /<key>HIP_HOST<\/key>\s*<string>([^<]*)<\/string>/.exec(text);
     return m ? m[1]! : null;
   }
 
   /** The node binary the LaunchAgent will exec (ProgramArguments[0]), or null if no plist. */
   readUnitNodePath(): string | null {
-    const target = plistPath();
-    if (!existsSync(target)) return null;
-    const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(readFileSync(target, "utf8"));
+    const text = readIfExists(plistPath());
+    if (text === null) return null;
+    const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(text);
     return m ? m[1]! : null;
   }
 
