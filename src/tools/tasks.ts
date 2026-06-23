@@ -73,7 +73,8 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
     },
     async (a) =>
       guard(() => {
-        const view = domain.orient(a.id);
+        const id = domain.resolveTaskRef(a.id);
+        const view = domain.orient(id);
         return view ? ok({ ...view, task: wire(view.task) }) : fail("not_found", a.id);
       }),
   );
@@ -89,7 +90,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
         patch: z.record(z.string(), z.unknown()).describe("Content fields to merge"),
       },
     },
-    async (a) => guard(() => ok(wire(domain.updateTask(a.id, a.patch, a.actorId)))),
+    async (a) => guard(() => ok(wire(domain.updateTask(domain.resolveTaskRef(a.id), a.patch, a.actorId)))),
   );
 
   server.registerTool(
@@ -125,7 +126,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       description: "Set waitingOn (status→waiting) or clear it (status→open).",
       inputSchema: { actorId: z.string(), id: z.string(), waitingOn: zWaiting.nullable() },
     },
-    async (a) => guard(() => ok(wire(domain.setWaiting(a.id, a.waitingOn, a.actorId)))),
+    async (a) => guard(() => ok(wire(domain.setWaiting(domain.resolveTaskRef(a.id), a.waitingOn, a.actorId)))),
   );
 
   server.registerTool(
@@ -135,7 +136,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       description: "Transition a task to done.",
       inputSchema: { actorId: z.string(), id: z.string() },
     },
-    async (a) => guard(() => ok(wire(domain.markDone(a.id, a.actorId)))),
+    async (a) => guard(() => ok(wire(domain.markDone(domain.resolveTaskRef(a.id), a.actorId)))),
   );
 
   server.registerTool(
@@ -145,7 +146,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       description: "Transition a task to dropped.",
       inputSchema: { actorId: z.string(), id: z.string() },
     },
-    async (a) => guard(() => ok(wire(domain.markDropped(a.id, a.actorId)))),
+    async (a) => guard(() => ok(wire(domain.markDropped(domain.resolveTaskRef(a.id), a.actorId)))),
   );
 
   server.registerTool(
@@ -169,7 +170,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
       guard(() => {
         const r = domain.block(
           {
-            task: a.taskId,
+            task: domain.resolveTaskRef(a.taskId),
             execution: a.executionId,
             reason: a.reason,
             ...(a.options ? { options: a.options } : {}),
@@ -190,7 +191,7 @@ export function registerTaskTools(server: McpServer, { domain }: ToolDeps): void
     async (a) =>
       guard(() => {
         const events = a.taskId
-          ? domain.store.events.forTask(a.taskId)
+          ? domain.store.events.forTask(domain.resolveTaskRef(a.taskId))
           : a.decisionId
             ? domain.store.events.forDecision(a.decisionId)
             : [];

@@ -28,6 +28,7 @@ export class Domain {
   appendThread = (id: string, e: Parameters<typeof tasks.appendThread>[2], actor: string, k?: Parameters<typeof tasks.appendThread>[4]) =>
     tasks.appendThread(this.store, id, e, actor, k);
   orient = (id: string) => tasks.orient(this.store, id);
+  resolveTaskRef = (ref: string) => tasks.resolveTaskRef(this.store, ref);
   listTasks = (f?: Parameters<typeof tasks.listTasks>[1]) => tasks.listTasks(this.store, f);
   recordNudge = (id: string, actor: string) => tasks.recordNudge(this.store, id, actor);
 

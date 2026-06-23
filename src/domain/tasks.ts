@@ -11,7 +11,7 @@ import type {
   HipEvent,
   Execution,
 } from "../types.js";
-import { validation, stateError } from "./errors.js";
+import { validation, stateError, notFound } from "./errors.js";
 import { mutateMarkdown, requireActor } from "./util.js";
 import { maybeCleanDemo } from "./demo-cleanup.js";
 import { payloadHash, resolveCreationKey } from "./idempotency.js";
@@ -45,6 +45,21 @@ const CONTENT_FIELDS = new Set([
   "references",
   "_meta",
 ]);
+
+/**
+ * Resolve a human-supplied task reference to an opaque id. `#42` or bare `42` map to the
+ * active task currently holding that display number; an opaque `tsk_…` id passes through
+ * unchanged. Opaque ids are never all-digits, so the numeric form can't collide with one.
+ * A number with no active holder is a not-found error (never a silent miss).
+ */
+export function resolveTaskRef(store: Store, ref: string): string {
+  const m = /^#?(\d+)$/.exec(ref.trim());
+  if (!m) return ref;
+  const n = Number(m[1]);
+  const id = store.findActiveTaskIdByShortId(n);
+  if (!id) throw notFound(`no active task #${n}`);
+  return id;
+}
 
 /** Read helper: a task in a terminal state cannot transition further. */
 export function isTerminal(task: Task): boolean {

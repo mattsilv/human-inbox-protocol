@@ -300,4 +300,24 @@ describe("short-id allocation + recycling (U2)", () => {
       expect(JSON.stringify(e)).not.toContain("shortId");
     }
   });
+
+  it("resolveTaskRef maps #N and bare N to the active opaque id; passes opaque through", () => {
+    const a = mk("a"); // #1
+    expect(d.resolveTaskRef("#1")).toBe(a.id);
+    expect(d.resolveTaskRef("1")).toBe(a.id);
+    expect(d.resolveTaskRef(a.id)).toBe(a.id); // opaque passthrough
+  });
+
+  it("resolveTaskRef throws not-found for a #N with no active holder", () => {
+    expect(() => d.resolveTaskRef("#999")).toThrowError(/no active task #999/);
+  });
+
+  it("resolveTaskRef follows a recycled number to its new owner, never the terminal task", () => {
+    mk("a"); // #1
+    const b = mk("b"); // #2
+    d.markDropped(b.id, MATT); // frees #2
+    const c = mk("c"); // reuses #2
+    expect(c.shortId).toBe(2);
+    expect(d.resolveTaskRef("#2")).toBe(c.id); // new owner, not b
+  });
 });
