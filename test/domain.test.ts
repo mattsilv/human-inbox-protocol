@@ -244,3 +244,60 @@ describe("domain layer (U3)", () => {
     );
   });
 });
+
+describe("short-id allocation + recycling (U2)", () => {
+  let root: string;
+  let store: Store;
+  let d: Domain;
+  const mk = (title: string) =>
+    d.createTask({ title, delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+
+  beforeEach(() => {
+    root = tmpRoot();
+    store = new Store({ root, clock: new FakeClock(Date.parse("2026-06-12T12:00:00Z")) });
+    d = new Domain(store);
+    d.createActor({ id: MATT, kind: "person", displayName: "Matt" });
+  });
+  afterEach(() => {
+    store.close();
+    cleanup(root);
+  });
+
+  it("assigns #1 to the first task in an empty store", () => {
+    expect(mk("first").shortId).toBe(1);
+  });
+
+  it("recycles the lowest free number after a terminal task frees it", () => {
+    const a = mk("a"); // 1
+    const b = mk("b"); // 2
+    const c = mk("c"); // 3
+    expect([a.shortId, b.shortId, c.shortId]).toEqual([1, 2, 3]);
+    d.markDropped(b.id, MATT); // frees #2
+    expect(mk("d").shortId).toBe(2); // lowest-free reuse, not 4
+  });
+
+  it("clears shortId on done; the number is reused by the next create", () => {
+    const a = mk("a"); // 1
+    d.markDone(a.id, MATT);
+    expect(store.getTask(a.id)!.shortId).toBeUndefined(); // freed on terminal
+    expect(mk("b").shortId).toBe(1); // reused
+  });
+
+  it("keeps shortId stable across waiting↔open (still active)", () => {
+    const a = mk("a"); // 1
+    d.setWaiting(a.id, { onActor: "act_alex", since: "2026-06-09" }, MATT);
+    expect(store.getTask(a.id)!.shortId).toBe(1);
+    d.setWaiting(a.id, null, MATT);
+    expect(store.getTask(a.id)!.shortId).toBe(1);
+  });
+
+  it("never writes shortId into the append-only event log (R4)", () => {
+    const a = mk("a");
+    d.markDone(a.id, MATT);
+    const evs = store.events.forTask(a.id);
+    expect(evs.length).toBeGreaterThan(0);
+    for (const e of evs) {
+      expect(JSON.stringify(e)).not.toContain("shortId");
+    }
+  });
+});

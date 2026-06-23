@@ -1,5 +1,5 @@
 import type { Store } from "../store/index.js";
-import { newId } from "../store/index.js";
+import { newId, allocateShortId } from "../store/index.js";
 import type {
   Task,
   TaskStatus,
@@ -77,6 +77,8 @@ export function createTask(store: Store, input: CreateTaskInput, actorId: string
   const task: Task = {
     id,
     title: input.title,
+    // Lease a recycling display number — created tasks are always active (open/waiting).
+    shortId: allocateShortId(store),
     state: waitingOn ? { kind: "waiting", ...normalizeWaiting(waitingOn, now) } : { kind: "open" },
     delegatedBy: input.delegatedBy,
     createdAt: now,
@@ -167,6 +169,9 @@ function transition(store: Store, id: string, to: "done" | "dropped", actorId: s
     if (t.state.kind === to) throw stateError(`task is already ${to}`);
     if (isTerminal(t)) throw stateError(`task is ${t.state.kind} and cannot transition to ${to}`);
     t.state = { kind: to };
+    // Free the display number back to the pool — terminal tasks render by opaque id.
+    // The status-changed event payload deliberately omits shortId (R4).
+    delete t.shortId;
     return [event(store, id, actorId, "status-changed", { to })];
   });
 }

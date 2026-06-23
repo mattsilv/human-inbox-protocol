@@ -218,6 +218,24 @@ export class Store {
     return rows.map((r) => this.getDecision(r.id)).filter((d): d is Decision => d !== null);
   }
 
+  /** short_id values held by active (open/waiting) tasks — the live display-id lease set. */
+  activeShortIds(): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT short_id AS s FROM task_index WHERE status IN ('open','waiting') AND short_id IS NOT NULL`,
+      )
+      .all() as { s: number }[];
+    return rows.map((r) => r.s);
+  }
+
+  /** Opaque id of the active task currently holding `shortId`, or null (U4 resolver). */
+  findActiveTaskIdByShortId(shortId: number): string | null {
+    const row = this.db
+      .prepare(`SELECT id FROM task_index WHERE status IN ('open','waiting') AND short_id = ? LIMIT 1`)
+      .get(shortId) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
   findWaitingTaskIdsByActor(actorId: string): string[] {
     const rows = this.db
       .prepare(`SELECT id FROM task_index WHERE status = 'waiting' AND waiting_on_actor = ?`)

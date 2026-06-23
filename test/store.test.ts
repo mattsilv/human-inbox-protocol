@@ -184,7 +184,9 @@ describe("store layer (U2)", () => {
   });
 
   it("a stray .tmp file is ignored and the original is byte-identical", () => {
-    const t = makeTask(store, { title: "keep" });
+    // Pin a shortId so reindex's display-id backfill is a no-op — this test is about
+    // ignoring half-written .tmp files, not about numbering.
+    const t = makeTask(store, { title: "keep", shortId: 1 });
     const path = filePath(store.paths, "task", t.id);
     const before = readFileSync(path, "utf8");
     writeFileSync(`${path}.99999.tmp`, "garbage half-write");
@@ -517,5 +519,24 @@ describe("short_id storage (U1)", () => {
     store.db.prepare(`UPDATE task_index SET short_id = 999 WHERE id = ?`).run(t.id); // corrupt the mirror
     reindex(store);
     expect(shortIdRow(t.id)).toBe(42); // re-derived from the file, not the stale mirror
+  });
+
+  it("backfill numbers pre-existing active tasks (lowest-free, createdAt order) and skips terminal", () => {
+    const clock = new FakeClock(Date.parse("2026-06-12T00:00:00Z"));
+    const s = new Store({ root: tmpRoot(), clock });
+    // Two active tasks predating the feature (no shortId) + one already numbered + one terminal.
+    const older = makeTask(s, { title: "older", createdAt: "2026-06-10T00:00:00Z" });
+    const newer = makeTask(s, { title: "newer", createdAt: "2026-06-11T00:00:00Z" });
+    const held = makeTask(s, { title: "held", shortId: 1, createdAt: "2026-06-09T00:00:00Z" });
+    const gone = makeTask(s, { title: "gone", state: { kind: "done" } });
+
+    reindex(s);
+
+    // #1 is taken by `held`; the two unnumbered active tasks get #2, #3 in createdAt order.
+    expect(s.getTask(held.id)!.shortId).toBe(1);
+    expect(s.getTask(older.id)!.shortId).toBe(2);
+    expect(s.getTask(newer.id)!.shortId).toBe(3);
+    expect(s.getTask(gone.id)!.shortId).toBeUndefined(); // terminal never numbered
+    s.close();
   });
 });
