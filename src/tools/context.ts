@@ -33,6 +33,19 @@ export function registerContextTools(server: McpServer, { domain }: ToolDeps): v
   );
 
   server.registerTool(
+    "actor_delete",
+    {
+      title: "Delete actor",
+      description:
+        "Hard-delete an actor — but only when nothing references it (e.g. a mis-created actor). Refuses if any task (provenance/waiting/nextActionOn/watcher), execution, decision, creation key, or event references it. The actor's own creation event does not count.",
+      inputSchema: {
+        actorId: z.string().describe("The actor to remove"),
+      },
+    },
+    async (a) => guard(() => ok(domain.deleteActor(a.actorId), `deleted ${a.actorId}`)),
+  );
+
+  server.registerTool(
     "entity_create",
     {
       title: "Create entity",

@@ -321,3 +321,52 @@ describe("short-id allocation + recycling (U2)", () => {
     expect(d.resolveTaskRef("#2")).toBe(c.id); // new owner, not b
   });
 });
+
+describe("actor_delete (U6)", () => {
+  let root: string;
+  let store: Store;
+  let d: Domain;
+
+  beforeEach(() => {
+    root = tmpRoot();
+    store = new Store({ root, clock: new FakeClock(Date.parse("2026-06-12T12:00:00Z")) });
+    d = new Domain(store);
+    d.createActor({ id: MATT, kind: "person", displayName: "Matt" });
+  });
+  afterEach(() => {
+    store.close();
+    cleanup(root);
+  });
+
+  it("hard-deletes an unreferenced (mis-created) actor — its own creation event doesn't block", () => {
+    d.createActor({ id: "act_mis", kind: "person", displayName: "Mistake" });
+    expect(store.getActor("act_mis")).not.toBeNull();
+    expect(d.deleteActor("act_mis")).toEqual({ id: "act_mis" });
+    expect(store.getActor("act_mis")).toBeNull();
+  });
+
+  it("throws not-found for a missing actor", () => {
+    expect(() => d.deleteActor("act_ghost")).toThrowError(/not found/);
+  });
+
+  it("refuses when the actor delegated a task (provenance)", () => {
+    d.createActor({ id: "act_used", kind: "person", displayName: "Used" });
+    d.createTask({ title: "t", delegatedBy: { actor: "act_used", role: "creator" } }, "act_used");
+    expect(() => d.deleteActor("act_used")).toThrowError(/in use/);
+    expect(store.getActor("act_used")).not.toBeNull(); // not deleted
+  });
+
+  it("refuses when a task is waiting on the actor", () => {
+    d.createActor({ id: "act_wait", kind: "person", displayName: "W" });
+    const t = d.createTask({ title: "t", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+    d.setWaiting(t.id, { onActor: "act_wait", since: "2026-06-09" }, MATT);
+    expect(() => d.deleteActor("act_wait")).toThrowError(/in use/);
+  });
+
+  it("refuses when the actor authored an event beyond its own creation (append-only log)", () => {
+    d.createActor({ id: "act_cmt", kind: "person", displayName: "Commenter" });
+    const t = d.createTask({ title: "t", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+    d.appendThread(t.id, { actor: "act_cmt", content: "weighing in" }, "act_cmt"); // commented event
+    expect(() => d.deleteActor("act_cmt")).toThrowError(/in use/);
+  });
+});

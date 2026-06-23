@@ -79,6 +79,23 @@ describe("MCP daemon + tool binding (U4)", () => {
     expect(miss.isError).toBe(true);
   });
 
+  it("actor_delete is registered, removes an unreferenced actor, and refuses an in-use one (U6)", async () => {
+    expect(await client.listTools()).toContain("actor_delete");
+
+    // Unreferenced (just created) → deletes cleanly; a second delete is now not-found.
+    await client.callOk("actor_create", { id: "act_tmp", kind: "service", displayName: "Tmp" });
+    await client.callOk("actor_delete", { actorId: "act_tmp" });
+    expect((await client.call("actor_delete", { actorId: "act_tmp" })).isError).toBe(true);
+
+    // In-use (MATT delegated a task) → refused.
+    await client.callOk("task_create", {
+      actorId: MATT,
+      title: "owned",
+      delegatedBy: { actor: MATT, role: "creator" },
+    });
+    expect((await client.call("actor_delete", { actorId: MATT })).isError).toBe(true);
+  });
+
   it("brackets a bare IPv6 HIP_HOST into a valid url authority", () => {
     const v6 = new HipDaemon({ store, token: TOKEN, host: "fd7a:1:2::3", port: 4319 });
     expect(v6.url).toBe("http://[fd7a:1:2::3]:4319/mcp");

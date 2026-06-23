@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import type {
   ObjectType,
   Task,
@@ -16,7 +16,7 @@ import { openDb, type Db } from "./db.js";
 import { EventLog } from "./events.js";
 import { dataPaths, filePath, dirForType, type DataPaths } from "./paths.js";
 import { serialize, deserialize } from "./markdown.js";
-import { indexTask, indexDecision, indexEntity, indexActor } from "./indexer.js";
+import { indexTask, indexDecision, indexEntity, indexActor, deindex } from "./indexer.js";
 
 export interface Clock {
   now(): number;
@@ -263,6 +263,64 @@ export class Store {
       .prepare(`SELECT task_id FROM thread_envelope WHERE envelope_id = ?`)
       .get(envelopeId) as { task_id: string } | undefined;
     return row?.task_id ?? null;
+  }
+
+  /**
+   * Every reference that would orphan if this actor were deleted — empty means the actor
+   * is safe to hard-delete (e.g. a mis-created one that was never used). An actor's own
+   * `created` event is deliberately NOT a blocker: actor_create always writes one, so
+   * counting it would make every actor undeletable. Any OTHER event the actor authored
+   * (a comment, a resolution, a task creation) means it did real work and blocks deletion.
+   */
+  actorReferences(actorId: string): string[] {
+    const blockers: string[] = [];
+
+    // Tasks: provenance (delegatedBy.actor, REQUIRED + immutable), waiting onActor,
+    // nextActionOn, watcher. next_action_on/waiting_on_actor are indexed; provenance and
+    // watcher are not, so this scans task files — fine, deletion is rare.
+    for (const id of this.listObjectIds("task")) {
+      const t = this.getTask(id);
+      if (!t) continue;
+      if (t.delegatedBy?.actor === actorId) blockers.push(`task ${id} (provenance)`);
+      else if (t.state.kind === "waiting" && t.state.onActor === actorId)
+        blockers.push(`task ${id} (waiting on)`);
+      else if (t.nextActionOn === actorId) blockers.push(`task ${id} (next action on)`);
+      else if (t.watcher === actorId) blockers.push(`task ${id} (watcher)`);
+    }
+
+    // Executions (SQLite-authoritative).
+    for (const r of this.db
+      .prepare(`SELECT id FROM executions WHERE actor = ?`)
+      .all(actorId) as { id: string }[])
+      blockers.push(`execution ${r.id}`);
+
+    // Decisions resolved by this actor (resolution.actor isn't indexed → file scan).
+    for (const id of this.listObjectIds("decision")) {
+      const d = this.getDecision(id);
+      if (d?.resolution?.actor === actorId) blockers.push(`decision ${id} (resolved by)`);
+    }
+
+    // Creation-key ledger (write-once idempotency).
+    for (const r of this.db
+      .prepare(`SELECT object_id FROM creation_keys WHERE actor_id = ?`)
+      .all(actorId) as { object_id: string }[])
+      blockers.push(`creation key → ${r.object_id}`);
+
+    // Event log: any event the actor authored beyond its own creation event.
+    for (const e of this.events.readAll()) {
+      if (e.actor !== actorId) continue;
+      const selfCreation =
+        e.kind === "created" && (e.payload as { type?: string } | undefined)?.type === "actor";
+      if (!selfCreation) blockers.push(`event ${e.id} (${e.kind})`);
+    }
+
+    return blockers;
+  }
+
+  /** Remove an actor's markdown file and its index row. Caller checks references first. */
+  hardDeleteActor(actorId: string): void {
+    rmSync(filePath(this.paths, "actor", actorId), { force: true });
+    this.db.transaction(() => deindex(this.db, "actor", actorId))();
   }
 
   findActorByAddress(address: string): Actor | null {

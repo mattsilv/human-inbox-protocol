@@ -58,6 +58,7 @@ export class Domain {
   createActor = (i: actors.CreateActorInput) => actors.createActor(this.store, i);
   ensureActor = (i: actors.CreateActorInput & { id: string }) => actors.ensureActor(this.store, i);
   getActor = (id: string) => actors.getActor(this.store, id);
+  deleteActor = (id: string) => actors.deleteActor(this.store, id);
   findActorByAddress = (addr: string) => actors.findActorByAddress(this.store, addr);
   createEntity = (i: entities.CreateEntityInput, actor: string) =>
     entities.createEntity(this.store, i, actor);
