@@ -30,6 +30,10 @@ The append-only conversation substrate on a Task that humans and agents both wri
 ### waitingOn
 The payload on a `waiting` Task naming the Actor being waited on, when the wait began, and the optional nudge cadence. Its presence is what makes a Task `waiting`; clearing it returns the Task to `open`.
 
+### Display id
+The small recycling integer (`#42`) leased to a Task while it is active (`open`/`waiting`) so a human tracks a short handle instead of the opaque `tsk_…` id. Stored authoritatively as `shortId` in frontmatter, mirrored into the index; assigned lowest-free at create and freed (cleared) on terminal, so the live set stays small. Display-only: never canonical, never a foreign key, and never written to the append-only Event log (recycling a number must not make past entries ambiguous). Accepted as a `#N` alias on any Task-id input.
+*Avoid:* task number (the opaque id is the canonical identity, not this).
+
 ## Decision
 
 ### Decision
