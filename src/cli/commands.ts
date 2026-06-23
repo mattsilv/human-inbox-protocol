@@ -105,18 +105,27 @@ function renderDecision(d: Decision, n: number, total: number): string {
   return lines.join("\n");
 }
 
+/** Human-facing handle: the small recycling `#N` while active, else the opaque id. */
+function taskRef(t: WireTask): string {
+  return typeof t.shortId === "number" ? `#${t.shortId}` : t.id;
+}
+
 function renderTaskLine(t: WireTask): string {
   const flag =
     t.status === "waiting"
       ? `${colorStatus("waiting")} on ${t.waitingOn?.onActor ?? "?"}`
       : colorStatus(t.status);
-  return `${colorId(t.id)}  [${flag}]  ${t.title}`;
+  return `${colorId(taskRef(t))}  [${flag}]  ${t.title}`;
 }
 
 function renderTaskView(t: WireTask, executions: Execution[], evs: HipEvent[]): string {
+  // Detail view keeps the opaque id visible (for debugging / cross-references) but leads
+  // with the #N handle when the task is active.
+  const idLabel =
+    typeof t.shortId === "number" ? `${colorId(`#${t.shortId}`)}  ${colorId(t.id)}` : colorId(t.id);
   const lines = [
     `${colorHeading(t.title)}  [${colorStatus(t.status)}]`,
-    `id: ${colorId(t.id)}   from: ${t.delegatedBy?.actor} (${t.delegatedBy?.role})`,
+    `id: ${idLabel}   from: ${t.delegatedBy?.actor} (${t.delegatedBy?.role})`,
   ];
   if (t.description) lines.push("", t.description);
   if (t.status === "waiting" && t.waitingOn) {
