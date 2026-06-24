@@ -29,10 +29,9 @@ export function allocateShortId(store: Store): number {
  * an upgraded store (existing active tasks predate the feature) gets numbered.
  */
 export function backfillShortIds(store: Store): number {
-  const active = store
-    .listObjectIds("task")
-    .map((id) => store.getTask(id))
-    .filter((t): t is Task => !!t && (t.state.kind === "open" || t.state.kind === "waiting"));
+  // Read only the active tasks (via the indexed status filter — terminal files are never
+  // touched), not every task file on disk.
+  const active: Task[] = [...store.listTasks({ status: "open" }), ...store.listTasks({ status: "waiting" })];
 
   const used = new Set<number>();
   for (const t of active) if (typeof t.shortId === "number") used.add(t.shortId);
@@ -47,8 +46,15 @@ export function backfillShortIds(store: Store): number {
     const n = lowestFree(used);
     used.add(n);
     t.shortId = n;
-    // Empty event list: a display-number assignment is not a domain state change.
-    store.writeObjects([{ type: "task", obj: t as unknown as Record<string, unknown> }], []);
+  }
+
+  // One commit for the whole backfill, not one per task. Empty event list: a display-number
+  // assignment is not a domain state change (R4).
+  if (missing.length) {
+    store.writeObjects(
+      missing.map((t) => ({ type: "task" as const, obj: t as unknown as Record<string, unknown> })),
+      [],
+    );
   }
   return missing.length;
 }

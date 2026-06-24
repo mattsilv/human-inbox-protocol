@@ -286,6 +286,11 @@ export class Store {
         blockers.push(`task ${id} (waiting on)`);
       else if (t.nextActionOn === actorId) blockers.push(`task ${id} (next action on)`);
       else if (t.watcher === actorId) blockers.push(`task ${id} (watcher)`);
+      // Thread authorship is its own reference class: reconcile writes a ThreadEntry whose
+      // `actor` is the sender while the event is authored by the system actor, so an actor
+      // can author thread content without owning the task or any event. Deleting it would
+      // orphan that thread history.
+      else if (t.thread?.some((e) => e.actor === actorId)) blockers.push(`task ${id} (thread author)`);
     }
 
     // Executions (SQLite-authoritative).

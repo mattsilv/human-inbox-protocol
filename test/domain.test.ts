@@ -369,4 +369,13 @@ describe("actor_delete (U6)", () => {
     d.appendThread(t.id, { actor: "act_cmt", content: "weighing in" }, "act_cmt"); // commented event
     expect(() => d.deleteActor("act_cmt")).toThrowError(/in use/);
   });
+
+  it("refuses when the actor only authored a thread entry (reconcile sender, event by system)", () => {
+    d.createActor({ id: "act_thr", kind: "person", displayName: "Threader" });
+    const t = d.createTask({ title: "t", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+    // Thread entry authored by act_thr while the event is authored by MATT — act_thr owns
+    // no task field and authored no event, only thread content. Must still block deletion.
+    d.appendThread(t.id, { actor: "act_thr", content: "from the sender" }, MATT);
+    expect(() => d.deleteActor("act_thr")).toThrowError(/in use/);
+  });
 });
