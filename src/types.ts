@@ -95,6 +95,8 @@ export type TaskState =
 export interface Task {
   id: string;
   title: string;
+  shortId?: number; // small recycling human-facing display number; leased while active,
+  // freed (cleared) on terminal. Display-only — never canonical, never in the event log.
   description?: string; // body field
   state: TaskState; // internal union; flat status/waitingOn on every boundary
   priority?: Priority;

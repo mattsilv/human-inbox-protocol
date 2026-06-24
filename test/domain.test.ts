@@ -244,3 +244,138 @@ describe("domain layer (U3)", () => {
     );
   });
 });
+
+describe("short-id allocation + recycling (U2)", () => {
+  let root: string;
+  let store: Store;
+  let d: Domain;
+  const mk = (title: string) =>
+    d.createTask({ title, delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+
+  beforeEach(() => {
+    root = tmpRoot();
+    store = new Store({ root, clock: new FakeClock(Date.parse("2026-06-12T12:00:00Z")) });
+    d = new Domain(store);
+    d.createActor({ id: MATT, kind: "person", displayName: "Matt" });
+  });
+  afterEach(() => {
+    store.close();
+    cleanup(root);
+  });
+
+  it("assigns #1 to the first task in an empty store", () => {
+    expect(mk("first").shortId).toBe(1);
+  });
+
+  it("recycles the lowest free number after a terminal task frees it", () => {
+    const a = mk("a"); // 1
+    const b = mk("b"); // 2
+    const c = mk("c"); // 3
+    expect([a.shortId, b.shortId, c.shortId]).toEqual([1, 2, 3]);
+    d.markDropped(b.id, MATT); // frees #2
+    expect(mk("d").shortId).toBe(2); // lowest-free reuse, not 4
+  });
+
+  it("clears shortId on done; the number is reused by the next create", () => {
+    const a = mk("a"); // 1
+    d.markDone(a.id, MATT);
+    expect(store.getTask(a.id)!.shortId).toBeUndefined(); // freed on terminal
+    expect(mk("b").shortId).toBe(1); // reused
+  });
+
+  it("keeps shortId stable across waiting↔open (still active)", () => {
+    const a = mk("a"); // 1
+    d.setWaiting(a.id, { onActor: "act_alex", since: "2026-06-09" }, MATT);
+    expect(store.getTask(a.id)!.shortId).toBe(1);
+    d.setWaiting(a.id, null, MATT);
+    expect(store.getTask(a.id)!.shortId).toBe(1);
+  });
+
+  it("never writes shortId into the append-only event log (R4)", () => {
+    const a = mk("a");
+    d.markDone(a.id, MATT);
+    const evs = store.events.forTask(a.id);
+    expect(evs.length).toBeGreaterThan(0);
+    for (const e of evs) {
+      expect(JSON.stringify(e)).not.toContain("shortId");
+    }
+  });
+
+  it("resolveTaskRef maps #N and bare N to the active opaque id; passes opaque through", () => {
+    const a = mk("a"); // #1
+    expect(d.resolveTaskRef("#1")).toBe(a.id);
+    expect(d.resolveTaskRef("1")).toBe(a.id);
+    expect(d.resolveTaskRef(a.id)).toBe(a.id); // opaque passthrough
+  });
+
+  it("resolveTaskRef throws not-found for a #N with no active holder", () => {
+    expect(() => d.resolveTaskRef("#999")).toThrowError(/no active task #999/);
+  });
+
+  it("resolveTaskRef follows a recycled number to its new owner, never the terminal task", () => {
+    mk("a"); // #1
+    const b = mk("b"); // #2
+    d.markDropped(b.id, MATT); // frees #2
+    const c = mk("c"); // reuses #2
+    expect(c.shortId).toBe(2);
+    expect(d.resolveTaskRef("#2")).toBe(c.id); // new owner, not b
+  });
+});
+
+describe("actor_delete (U6)", () => {
+  let root: string;
+  let store: Store;
+  let d: Domain;
+
+  beforeEach(() => {
+    root = tmpRoot();
+    store = new Store({ root, clock: new FakeClock(Date.parse("2026-06-12T12:00:00Z")) });
+    d = new Domain(store);
+    d.createActor({ id: MATT, kind: "person", displayName: "Matt" });
+  });
+  afterEach(() => {
+    store.close();
+    cleanup(root);
+  });
+
+  it("hard-deletes an unreferenced (mis-created) actor — its own creation event doesn't block", () => {
+    d.createActor({ id: "act_mis", kind: "person", displayName: "Mistake" });
+    expect(store.getActor("act_mis")).not.toBeNull();
+    expect(d.deleteActor("act_mis")).toEqual({ id: "act_mis" });
+    expect(store.getActor("act_mis")).toBeNull();
+  });
+
+  it("throws not-found for a missing actor", () => {
+    expect(() => d.deleteActor("act_ghost")).toThrowError(/not found/);
+  });
+
+  it("refuses when the actor delegated a task (provenance)", () => {
+    d.createActor({ id: "act_used", kind: "person", displayName: "Used" });
+    d.createTask({ title: "t", delegatedBy: { actor: "act_used", role: "creator" } }, "act_used");
+    expect(() => d.deleteActor("act_used")).toThrowError(/in use/);
+    expect(store.getActor("act_used")).not.toBeNull(); // not deleted
+  });
+
+  it("refuses when a task is waiting on the actor", () => {
+    d.createActor({ id: "act_wait", kind: "person", displayName: "W" });
+    const t = d.createTask({ title: "t", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+    d.setWaiting(t.id, { onActor: "act_wait", since: "2026-06-09" }, MATT);
+    expect(() => d.deleteActor("act_wait")).toThrowError(/in use/);
+  });
+
+  it("refuses when the actor authored an event beyond its own creation (append-only log)", () => {
+    d.createActor({ id: "act_cmt", kind: "person", displayName: "Commenter" });
+    const t = d.createTask({ title: "t", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+    d.appendThread(t.id, { actor: "act_cmt", content: "weighing in" }, "act_cmt"); // commented event
+    expect(() => d.deleteActor("act_cmt")).toThrowError(/in use/);
+  });
+
+  it("refuses when the actor only authored a thread entry (reconcile sender, event by system)", () => {
+    d.createActor({ id: "act_thr", kind: "person", displayName: "Threader" });
+    const t = d.createTask({ title: "t", delegatedBy: { actor: MATT, role: "creator" } }, MATT);
+    // Thread entry authored by act_thr while the event is authored by MATT — act_thr owns
+    // no task field and authored no event, only thread content. Must still block deletion.
+    d.appendThread(t.id, { actor: "act_thr", content: "from the sender" }, MATT);
+    expect(() => d.deleteActor("act_thr")).toThrowError(/in use/);
+  });
+});

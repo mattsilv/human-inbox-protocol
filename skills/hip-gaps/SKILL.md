@@ -52,11 +52,17 @@ mutates HIP state.
    **count** — how many times that same gap was hit is the demand signal. Break ties by
    most-recent `createdAt`.
 
-4. **Show the ranked list.** For each group, top first:
-   - the gap (normalized title) and its **hit count**,
-   - the task IDs in the group,
-   - a one-line excerpt from the most detailed `description` (the concrete thing the
-     client tried to do and the tool it wished existed).
+4. **Show the ranked list — one line per gap, top first.** Keep it terse; this is a
+   triage list, not a dump:
+   ```
+   #<shortId> (×<count>) <normalized title>
+   ```
+   Use the **`shortId`** from each task (the small `#N` display handle on the wire
+   payload) rather than the opaque `tsk_…` id — `#7` reads where `tsk_mqmyg7yrqt7pv0`
+   does not. For a gap group with more than one task, show the representative task's
+   `#N` and put the count in parens; the rest are reachable via the full task list.
+   Append a short `— <excerpt>` clause **only** to the top one or two groups, drawn from
+   the most detailed `description`; lower-ranked gaps stay to the single title line.
 
 5. **Offer to plan.** Ask which gap to act on, then run `/ce-plan` for the selected one,
    seeding it with the gap's description and the task IDs as origin context. One gap →
@@ -66,7 +72,7 @@ mutates HIP state.
 
 - The output is a short, ranked backlog — highest-demand protocol gap at the top, not a
   raw task dump.
-- Every listed gap traces back to real client usage (a `task_read` on any task ID shows
-  the thread/description that motivated it).
+- Every listed gap traces back to real client usage (a `task_read` on the gap's `#N` —
+  or its opaque id — shows the thread/description that motivated it).
 - The skill stays generic: connection comes from install output / env, never hardcoded
   hosts or tokens, so any HIP contributor can run it against their own daemon.

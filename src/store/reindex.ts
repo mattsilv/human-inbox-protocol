@@ -4,6 +4,7 @@ import { deserialize } from "./markdown.js";
 import { indexTask, indexDecision, indexEntity, indexActor } from "./indexer.js";
 import { filePath } from "./paths.js";
 import { newId } from "./ids.js";
+import { backfillShortIds } from "./shortid.js";
 import type { Store } from "./store.js";
 import type { Task, Decision, Entity, Actor, ObjectType, HipEvent } from "../types.js";
 
@@ -46,6 +47,11 @@ export function reindex(store: Store): ReindexReport {
     }
   });
   tx.immediate();
+
+  // Number any active task that predates the short-id feature (upgrade backfill). Runs
+  // after the index rebuild so the active set + existing leases are accurate; idempotent,
+  // so it is a cheap no-op once every active task is numbered.
+  backfillShortIds(store);
 
   for (const ev of editEvents) store.events.append(ev);
   return { counts, externalEdits: editEvents.length };

@@ -28,6 +28,7 @@ export class Domain {
   appendThread = (id: string, e: Parameters<typeof tasks.appendThread>[2], actor: string, k?: Parameters<typeof tasks.appendThread>[4]) =>
     tasks.appendThread(this.store, id, e, actor, k);
   orient = (id: string) => tasks.orient(this.store, id);
+  resolveTaskRef = (ref: string) => tasks.resolveTaskRef(this.store, ref);
   listTasks = (f?: Parameters<typeof tasks.listTasks>[1]) => tasks.listTasks(this.store, f);
   recordNudge = (id: string, actor: string) => tasks.recordNudge(this.store, id, actor);
 
@@ -57,6 +58,7 @@ export class Domain {
   createActor = (i: actors.CreateActorInput) => actors.createActor(this.store, i);
   ensureActor = (i: actors.CreateActorInput & { id: string }) => actors.ensureActor(this.store, i);
   getActor = (id: string) => actors.getActor(this.store, id);
+  deleteActor = (id: string) => actors.deleteActor(this.store, id);
   findActorByAddress = (addr: string) => actors.findActorByAddress(this.store, addr);
   createEntity = (i: entities.CreateEntityInput, actor: string) =>
     entities.createEntity(this.store, i, actor);

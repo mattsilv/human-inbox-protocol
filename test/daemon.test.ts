@@ -56,6 +56,46 @@ describe("MCP daemon + tool binding (U4)", () => {
     expect((list.tasks as unknown[]).length).toBe(1);
   });
 
+  it("accepts a #N display handle anywhere a task id is taken (U4)", async () => {
+    const created = await client.callOk("task_create", {
+      actorId: MATT,
+      title: "Numbered",
+      delegatedBy: { actor: MATT, role: "creator" },
+    });
+    const shortId = created.shortId as number;
+    expect(shortId).toBe(1);
+
+    // task_read by #N resolves to the same task as the opaque id.
+    const byShort = await client.callOk("task_read", { id: `#${shortId}` });
+    expect((byShort.task as { id: string }).id).toBe(created.id);
+
+    // a transition verb also accepts #N.
+    await client.callOk("task_done", { actorId: MATT, id: `#${shortId}` });
+    const done = await client.callOk("task_read", { id: created.id as string });
+    expect((done.task as { status: string }).status).toBe("done");
+
+    // an unknown #N is a clean not-found error, not a silent miss.
+    const miss = await client.call("task_read", { id: "#999" });
+    expect(miss.isError).toBe(true);
+  });
+
+  it("actor_delete is registered, removes an unreferenced actor, and refuses an in-use one (U6)", async () => {
+    expect(await client.listTools()).toContain("actor_delete");
+
+    // Unreferenced (just created) → deletes cleanly; a second delete is now not-found.
+    await client.callOk("actor_create", { id: "act_tmp", kind: "service", displayName: "Tmp" });
+    await client.callOk("actor_delete", { actorId: "act_tmp" });
+    expect((await client.call("actor_delete", { actorId: "act_tmp" })).isError).toBe(true);
+
+    // In-use (MATT delegated a task) → refused.
+    await client.callOk("task_create", {
+      actorId: MATT,
+      title: "owned",
+      delegatedBy: { actor: MATT, role: "creator" },
+    });
+    expect((await client.call("actor_delete", { actorId: MATT })).isError).toBe(true);
+  });
+
   it("brackets a bare IPv6 HIP_HOST into a valid url authority", () => {
     const v6 = new HipDaemon({ store, token: TOKEN, host: "fd7a:1:2::3", port: 4319 });
     expect(v6.url).toBe("http://[fd7a:1:2::3]:4319/mcp");

@@ -99,6 +99,14 @@ decision_list                                            # pending decisions in 
 `{ waitingOn }` or `{ status: "blocked" }` query — a blocked *execution* is observed via
 `execution_get` (F3), and "waiting on actor X" is `task_list { status: "waiting", onActor }`.
 
+**Render `shortId`, not the opaque id, in the digest.** Every active task on the wire
+carries a `shortId` — a small recycling integer (`#7`) leased while the task is active and
+freed when it goes terminal. Print `#<shortId>` instead of `tsk_mqmyg7yrqt7pv0` so the
+digest stays scannable; the live set stays small (a person tracks tens, not thousands).
+The opaque `id` is still the durable key for cross-references and is accepted as a
+`#<shortId>` alias on every id-taking tool. Terminal tasks have no `shortId` — fall back to
+the opaque id there.
+
 ## Idempotency & retries
 
 - `reconcile_submit` is idempotent on `envelope.id`.

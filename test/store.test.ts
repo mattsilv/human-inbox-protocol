@@ -184,7 +184,9 @@ describe("store layer (U2)", () => {
   });
 
   it("a stray .tmp file is ignored and the original is byte-identical", () => {
-    const t = makeTask(store, { title: "keep" });
+    // Pin a shortId so reindex's display-id backfill is a no-op — this test is about
+    // ignoring half-written .tmp files, not about numbering.
+    const t = makeTask(store, { title: "keep", shortId: 1 });
     const path = filePath(store.paths, "task", t.id);
     const before = readFileSync(path, "utf8");
     writeFileSync(`${path}.99999.tmp`, "garbage half-write");
@@ -261,8 +263,8 @@ describe("schema migration (task_tag, is_demo, creation_keys)", () => {
     raw.close();
 
     const db = openDb(dbFile);
-    expect(SCHEMA_VERSION).toBe(4);
-    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    expect(SCHEMA_VERSION).toBe(5);
+    expect(db.pragma("user_version", { simple: true })).toBe(5);
     const tbl = db
       .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_tag'`)
       .get();
@@ -275,9 +277,12 @@ describe("schema migration (task_tag, is_demo, creation_keys)", () => {
     // is_demo added by the v3 ALTER; the pre-existing row defaults to 0.
     const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
     expect(cols.some((c) => c.name === "is_demo")).toBe(true);
-    expect(db.prepare(`SELECT title, is_demo FROM task_index WHERE id='tsk_a'`).get()).toEqual({
+    // v5 ALTER adds short_id; the pre-existing row is NULL (unallocated).
+    expect(cols.some((c) => c.name === "short_id")).toBe(true);
+    expect(db.prepare(`SELECT title, is_demo, short_id FROM task_index WHERE id='tsk_a'`).get()).toEqual({
       title: "keep",
       is_demo: 0,
+      short_id: null,
     });
     db.close();
     cleanup(root);
@@ -286,14 +291,39 @@ describe("schema migration (task_tag, is_demo, creation_keys)", () => {
   it("opening an already-current DB is an idempotent no-op (no duplicate-column error)", () => {
     const root = tmpRoot();
     const dbFile = join(root, "hip.db");
-    // Fresh DB gets is_demo from SCHEMA; reopening must not re-run ALTER (would throw
-    // "duplicate column name") — the table_info guard handles this.
+    // Fresh DB gets is_demo + short_id from SCHEMA; reopening must not re-run any ALTER
+    // (would throw "duplicate column name") — the table_info guards handle this.
     const db1 = openDb(dbFile);
-    expect(db1.pragma("user_version", { simple: true })).toBe(4);
+    expect(db1.pragma("user_version", { simple: true })).toBe(5);
     db1.close();
     const db2 = openDb(dbFile);
-    expect(db2.pragma("user_version", { simple: true })).toBe(4);
+    expect(db2.pragma("user_version", { simple: true })).toBe(5);
     db2.close();
+    cleanup(root);
+  });
+
+  it("upgrades a v4 DB: ALTER adds short_id, existing rows default NULL, fresh DB has the column", () => {
+    const root = tmpRoot();
+    const dbFile = join(root, "hip.db");
+    // Hand-build a v4 store: task_index with is_demo but no short_id, user_version = 4.
+    const raw = new Database(dbFile);
+    raw.exec(
+      `CREATE TABLE task_index (id TEXT PRIMARY KEY, title TEXT, status TEXT, next_action_on TEXT,
+        waiting_on_actor TEXT, priority TEXT, content_hash TEXT, created_at TEXT, updated_at TEXT,
+        is_demo INTEGER NOT NULL DEFAULT 0);`,
+    );
+    raw.prepare(`INSERT INTO task_index (id, title, status) VALUES ('tsk_v4','keep','open')`).run();
+    raw.pragma("user_version = 4");
+    raw.close();
+
+    const db = openDb(dbFile);
+    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
+    expect(cols.some((c) => c.name === "short_id")).toBe(true);
+    expect(db.prepare(`SELECT short_id FROM task_index WHERE id='tsk_v4'`).get()).toEqual({
+      short_id: null,
+    });
+    db.close();
     cleanup(root);
   });
 
@@ -312,7 +342,7 @@ describe("schema migration (task_tag, is_demo, creation_keys)", () => {
     raw.close();
 
     const db = openDb(dbFile);
-    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(5);
     const cols = db.pragma("table_info(task_index)") as Array<{ name: string }>;
     expect(cols.some((c) => c.name === "is_demo")).toBe(true);
     expect(db.prepare(`SELECT is_demo FROM task_index WHERE id='tsk_v2'`).get()).toEqual({
@@ -448,5 +478,65 @@ describe("task-state codec (U2) — flat ↔ union", () => {
   it("defensive lift: { status: waiting } with missing payload degrades to open", () => {
     const lifted = liftTaskState({ ...base, status: "waiting" } as unknown as Record<string, unknown>);
     expect(lifted.state).toEqual({ kind: "open" });
+  });
+});
+
+describe("short_id storage (U1)", () => {
+  let root: string;
+  let store: Store;
+  beforeEach(() => {
+    root = tmpRoot();
+    store = new Store({ root });
+  });
+  afterEach(() => {
+    store.close();
+    cleanup(root);
+  });
+
+  function shortIdRow(id: string): number | null {
+    return (store.db.prepare(`SELECT short_id FROM task_index WHERE id = ?`).get(id) as {
+      short_id: number | null;
+    }).short_id;
+  }
+
+  it("round-trips shortId through frontmatter and mirrors it into task_index", () => {
+    const t = makeTask(store, { title: "numbered", shortId: 7 });
+    const raw = readFileSync(filePath(store.paths, "task", t.id), "utf8");
+    expect(raw).toContain("shortId: 7");
+    expect(store.getTask(t.id)!.shortId).toBe(7);
+    expect(shortIdRow(t.id)).toBe(7);
+  });
+
+  it("a task with no shortId indexes as NULL and omits the frontmatter key", () => {
+    const t = makeTask(store, { title: "plain" });
+    const raw = readFileSync(filePath(store.paths, "task", t.id), "utf8");
+    expect(raw).not.toContain("shortId");
+    expect(shortIdRow(t.id)).toBeNull();
+  });
+
+  it("reindex rebuilds short_id from authoritative frontmatter (survives wipe)", () => {
+    const t = makeTask(store, { title: "numbered", shortId: 42 });
+    store.db.prepare(`UPDATE task_index SET short_id = 999 WHERE id = ?`).run(t.id); // corrupt the mirror
+    reindex(store);
+    expect(shortIdRow(t.id)).toBe(42); // re-derived from the file, not the stale mirror
+  });
+
+  it("backfill numbers pre-existing active tasks (lowest-free, createdAt order) and skips terminal", () => {
+    const clock = new FakeClock(Date.parse("2026-06-12T00:00:00Z"));
+    const s = new Store({ root: tmpRoot(), clock });
+    // Two active tasks predating the feature (no shortId) + one already numbered + one terminal.
+    const older = makeTask(s, { title: "older", createdAt: "2026-06-10T00:00:00Z" });
+    const newer = makeTask(s, { title: "newer", createdAt: "2026-06-11T00:00:00Z" });
+    const held = makeTask(s, { title: "held", shortId: 1, createdAt: "2026-06-09T00:00:00Z" });
+    const gone = makeTask(s, { title: "gone", state: { kind: "done" } });
+
+    reindex(s);
+
+    // #1 is taken by `held`; the two unnumbered active tasks get #2, #3 in createdAt order.
+    expect(s.getTask(held.id)!.shortId).toBe(1);
+    expect(s.getTask(older.id)!.shortId).toBe(2);
+    expect(s.getTask(newer.id)!.shortId).toBe(3);
+    expect(s.getTask(gone.id)!.shortId).toBeUndefined(); // terminal never numbered
+    s.close();
   });
 });

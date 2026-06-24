@@ -60,6 +60,31 @@ describe("read-command rendering stays plain in non-TTY (U4)", () => {
     expect(out).toContain("from: act_matt");
   });
 
+  it("leads with the #N display handle in list and show; keeps the opaque id on show (U3)", async () => {
+    const t = daemon.domain.createTask(
+      { title: "Numbered task", delegatedBy: { actor: MATT, role: "creator" } },
+      MATT,
+    );
+    const line = await cmd.listTasks(client);
+    expect(line).toContain(`#${t.shortId}`); // list leads with the short handle
+    expect(line).not.toContain(t.id); // not the opaque id
+
+    const shown = await cmd.show(client, t.id);
+    expect(shown).toContain(`#${t.shortId}`);
+    expect(shown).toContain(t.id); // detail view keeps the opaque id visible
+  });
+
+  it("renders the opaque id for a terminal task that has no #N (U3)", async () => {
+    const t = daemon.domain.createTask(
+      { title: "Finished", delegatedBy: { actor: MATT, role: "creator" } },
+      MATT,
+    );
+    daemon.domain.markDone(t.id, MATT); // frees the short id
+    const line = await cmd.listTasks(client);
+    expect(line).toContain(t.id); // falls back to opaque id
+    expect(line).not.toContain("#"); // no stray #undefined
+  });
+
   it("renderDecision (inbox) has no ANSI and keeps the option hint (R7)", async () => {
     daemon.domain.createDecision(
       { prompt: "Fold laundry now?", options: [{ id: "now", label: "Now" }] },
